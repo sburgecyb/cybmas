@@ -1,0 +1,27 @@
+# Cloud Scheduler jobs for the cybmas pipeline
+jobs:
+  - name: embedding-worker-full-sync
+    description: Full JIRA → pgvector sync (weekly, Sunday 02:00 UTC)
+    schedule: "0 2 * * 0"
+    timeZone: UTC
+    httpTarget:
+      uri: ${EMBEDDING_WORKER_JOB_URL}
+      httpMethod: POST
+      body: '{"sync_mode": "full"}'
+      headers:
+        Content-Type: application/json
+      oidcToken:
+        serviceAccountEmail: ${EMBEDDING_WORKER_SA}
+
+  - name: embedding-worker-delta-sync
+    description: Delta JIRA → pgvector sync (every 15 minutes)
+    schedule: "*/15 * * * *"
+    timeZone: UTC
+    httpTarget:
+      uri: ${EMBEDDING_WORKER_JOB_URL}
+      httpMethod: POST
+      body: '{"sync_mode": "delta"}'
+      headers:
+        Content-Type: application/json
+      oidcToken:
+        serviceAccountEmail: ${EMBEDDING_WORKER_SA}

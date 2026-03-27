@@ -1,0 +1,113 @@
+# Cursor Rules — Support Agent Multi-Agent System
+
+## Project Context
+
+You are building a multi-agent technical support chatbot for L1/L2/L3 support engineers.
+The system is built using:
+- **Google ADK** (Agent Development Kit) for agent orchestration
+- **Python 3.11 + FastAPI** for backend services
+- **Next.js 14** (App Router) for frontend
+- **PostgreSQL + pgvector** (vector(768)) for vector search
+- **Google Cloud Platform** for all infrastructure
+- **JIRA** as the source of truth for tickets and incidents
+- **Vertex AI** (Gemini 1.5 Flash + text-embedding-004, 768-dim) for LLM and embeddings
+- **GOOGLE_APPLICATION_CREDENTIALS** for authentication — same service account JSON key locally and in production
+
+## Authentication — Google Credentials
+
+ALWAYS use `GOOGLE_APPLICATION_CREDENTIALS` environment variable for all Google API calls.
+NEVER use API keys or hardcoded credentials.
+ADK, Vertex AI SDK, and google-generativeai all pick up credentials automatically from this env var.
+
+```python
+# No auth code needed — just set env var and use the SDK
+import vertexai
+vertexai.init(
+    project=os.getenv("GCP_PROJECT_ID"),
+    location=os.getenv("VERTEX_AI_LOCATION", "us-central1")
+)
+# Credentials loaded automatically from GOOGLE_APPLICATION_CREDENTIALS
+```
+
+## LLM — Gemini 1.5 Flash via Vertex AI
+
+Use Gemini 1.5 Flash for all LLM calls. ADK handles auth automatically.
+
+```python
+from google.adk.agents import LlmAgent
+
+agent = LlmAgent(
+    name="agent_name",
+    model="gemini-1.5-flash",  # ADK uses Vertex AI automatically via GOOGLE_APPLICATION_CREDENTIALS
+    instruction="System prompt here...",
+    tools=[...],
+)
+```
+
+## Embeddings — text-embedding-004 (768-dim) via Vertex AI
+
+Always use Vertex AI text-embedding-004 for embeddings. Same model locally and in production.
+768-dim vectors everywhere — pgvector column is always vector(768).
+
+```python
+import vertexai
+from vertexai.language_models import TextEmbeddingModel
+
+vertexai.init(project=os.getenv("GCP_PROJECT_ID"), location=os.getenv("VERTEX_AI_LOCATION"))
+model = TextEmbeddingModel.from_pretrained("text-embedding-004")
+
+async def embed_text(text: str) -> list[float]:
+    embeddings = model.get_embeddings([text])
+    return embeddings[0].values  # always 768-dim
+```
+
+NEVER use sentence-transformers or any local embedding model.
+NEVER use EMBEDDING_PROVIDER switching — there is only one provider: vertexai.
+
+## Architecture Summary
+
+Five Cloud Run services:
+1. `api-gateway` — FastAPI, JWT auth, session routing
+2. `orchestrator` — ADK Orchestrator Agent, intent routing
+3. `l1l2-agent` — ADK agent for ticket search (UC1)
+4. `l3-agent` — ADK agent for incident/RCA search (UC2)
+5. `session-agent` — ADK agent for session persistence and feedback
+
+One Cloud Run Job:
+- `embedding-worker` — JIRA → Vertex AI embed → pgvector pipeline
+
+## Code Quality Rules
+
+- Always use Python type hints. No `Any` unless unavoidable.
+- Use `pydantic` v2 BaseModel for all data structures.
+- Async first: use `asyncpg` for DB, `redis.asyncio` for cache, `httpx.AsyncClient` for HTTP.
+- All secrets from environment variables — never hardcoded.
+- Structured JSON logging using `structlog`.
+- Each ADK Tool must be decorated with `@tool` and have a clear docstring.
+- Each ADK Agent uses `LlmAgent` with `model="gemini-1.5-flash"`.
+- Tools in `tools/` directory; skills in `skills/` directory.
+- FastAPI routes use dependency injection for DB and Redis connections.
+- All database operations go through repository classes.
+
+## Naming Conventions
+
+- Python files: `snake_case.py`
+- Classes: `PascalCase`
+- Functions/variables: `snake_case`
+- Constants: `UPPER_SNAKE_CASE`
+- ADK Agents: `{purpose}_agent`
+- ADK Tools: verb-style (e.g. `search_tickets`, `fetch_jira_ticket`)
+- Database tables: `snake_case` plural
+- Environment variables: `UPPER_SNAKE_CASE`
+
+## Important Constraints
+
+- pgvector uses cosine similarity: always use `<=>` operator
+- Embeddings are always 768 dimensions (text-embedding-004)
+- Business unit filter is ALWAYS applied to vector search — never search across all BUs without explicit intent
+- Incident and ticket embeddings are in separate tables — never mix
+- Sessions stored in PostgreSQL, NOT Redis (Redis is only for caching)
+- JIRA API calls must go through the `jira_fetch` tool only
+- Streaming responses use SSE — FastAPI `StreamingResponse` with `text/event-stream`
+- NEVER use sentence-transformers, Ollama, or LiteLLM
+- NEVER use GOOGLE_API_KEY — always GOOGLE_APPLICATION_CREDENTIALS

@@ -1,0 +1,7 @@
+asyncpg==0.29.0
+bcrypt==4.2.1
+python-dotenv==1.0.1
+vertexai==1.57.0
+google-cloud-aiplatform==1.57.0
+structlog==24.1.0
+numpy

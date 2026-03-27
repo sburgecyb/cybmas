@@ -1,0 +1,275 @@
+# Technical Support Multi-Agent System — Architecture
+
+## Overview
+
+This system provides AI-powered technical support tooling for L1/L2/L3 engineers via a multi-agent architecture built on **Google ADK (Agent Development Kit)**, deployed on **GCP**, using **PostgreSQL + pgvector** for vector search and **JIRA** as the source of truth.
+
+---
+
+## System Goals
+
+| Use Case | Target User | Core Capability |
+|---|---|---|
+| UC1 – Ticket Resolution | L1 / L2 Engineers | Semantic search over historical tickets by business unit |
+| UC2 – Incident Management | L3 Engineers | Search past incidents, RCAs, cross-reference with tickets |
+
+---
+
+## Architecture Layers
+
+### 1. Frontend — React / Next.js (Cloud Run)
+- Chat interface with SSE streaming for real-time responses
+- Business unit selector (B1, B2, …) scoped per session
+- "Incident Management" knowledge base checkbox (UC2 toggle)
+- Feedback widget: correct / can be better / incorrect
+- Session history sidebar — resume past conversations
+
+### 2. API Gateway — GCP API Gateway + Cloud Run
+- JWT-based authentication (python-jose + passlib) — engineer credentials in PostgreSQL users table
+- Session routing — maps engineer → active session
+- Rate limiting per user
+- SSE proxy for streaming agent responses
+
+### 3. Orchestrator Agent — Google ADK
+- Central routing brain of the system
+- Receives intent from API layer
+- Decides which specialist agent(s) to invoke
+- Aggregates and synthesises multi-agent responses
+- Manages conversation context window
+- Streams final response back to frontend
+
+### 4. Specialist Agents — Google ADK
+
+#### L1/L2 Resolution Agent
+- Handles Use Case 1 (ticket search)
+- Scopes search to selected business unit(s)
+- Tools: `vector_search`, `jira_fetch`, `check_ticket_status`, `rerank_results`, `summarize_skill`
+- Scenarios: known issue search, JIRA ticket lookup, status check
+
+#### L3 Resolutions Agent
+- Handles Use Case 2 (incident management)
+- Activated when "Incident Management" checkbox is selected
+- Tools: `incident_vector_search`, `rca_fetch`, `cross_ref_tickets`, `jira_fetch`, `summarize_skill`
+- Scenarios: past incident search, cross-reference with BU tickets, follow-up investigation
+
+#### Session & Feedback Agent
+- Persists and retrieves chat sessions per engineer
+- Handles feedback capture (correct / can be better / incorrect)
+- Provides feedback analytics for quality monitoring
+- Tools: `save_session`, `load_session`, `save_feedback`
+
+### 5. Tools & Skills Layer
+
+| Tool / Skill | Description |
+|---|---|
+| `vector_search` | Cosine similarity search against pgvector embeddings, filtered by BU and type |
+| `jira_fetch` | JIRA REST API wrapper — fetch by ticket ID, JQL query |
+| `check_ticket_status` | Lightweight JIRA status check tool |
+| `incident_vector_search` | Same as `vector_search` but scoped to incident/RCA embeddings |
+| `rca_fetch` | Fetches full RCA documents from GCS or JIRA attachment |
+| `cross_ref_tickets` | Links incidents to related JIRA tickets via metadata joins |
+| `rerank_results` | Re-ranks top-k vector results for relevance (Cohere Rerank or custom) |
+| `summarize_skill` | LLM prompt skill — synthesises multiple retrieved documents into a coherent answer |
+| `save_session` / `load_session` | Read/write conversation state to PostgreSQL |
+| `save_feedback` | Appends engineer feedback to `engineer_feedback` table |
+
+### 6. Data & Storage Layer — GCP
+
+| Service | Purpose |
+|---|---|
+| **Cloud SQL (PostgreSQL + pgvector)** | Ticket embeddings, incident embeddings, chat sessions, feedback, BU metadata |
+| **Cloud Storage (GCS)** | Raw JIRA ticket snapshots, incident report documents, RCA PDFs |
+| **Memorystore (Redis)** | Session cache, rate limit counters, BU scope cache |
+
+### 7. Data Ingestion Pipeline
+
+```
+JIRA Webhook / Scheduled Sync
+        │
+        ▼
+Cloud Pub/Sub (topic: jira-events)
+        │
+        ▼
+Cloud Run Job (embedding-worker)
+  ├── Fetch ticket/incident content from JIRA REST API
+  ├── Chunk content (tickets: full body; incidents: sections)
+  ├── Generate embeddings via Vertex AI text-embedding-gecko
+  ├── Upsert into pgvector (tickets table / incidents table)
+  └── Tag with business_unit, ticket_type, status, created_at
+        │
+        ▼
+Cloud SQL (pgvector) + GCS (raw snapshots)
+```
+
+Sync modes:
+- **Delta sync**: triggered by JIRA webhook on ticket create/update
+- **Full sync**: Cloud Scheduler daily job — reconciles drift
+
+### 8. LLM & Embedding Provider — Vertex AI Everywhere
+
+The system uses **Vertex AI for both LLM and embeddings in all environments** — local dev and production are identical. The only difference is the authentication method.
+
+| Setting | Local Dev | GCP Production |
+|---|---|---|
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON key (`cybmasacn.json`) | Not needed — Cloud Run uses attached service account |
+| `GCP_PROJECT_ID` | Your GCP project ID | Your GCP project ID |
+| `VERTEX_AI_LOCATION` | `us-central1` | `us-central1` |
+| `GEMINI_MODEL` | `gemini-1.5-flash` | `gemini-1.5-flash` |
+| `EMBEDDING_MODEL` | `text-embedding-004` | `text-embedding-004` |
+| `EMBEDDING_DIMENSIONS` | `768` | `768` |
+
+**Local dev**: Service account JSON key file authenticates all Vertex AI calls. Same model, same vectors, same quality as production.
+
+**Production (GCP)**: Cloud Run service account (attached via Workload Identity) authenticates automatically — no key file needed.
+
+**No provider switching needed**: pgvector schema is always `vector(768)`. Local and production DB schemas are identical. Data generated locally can be migrated to production as-is.
+
+---
+
+## Database Schema (PostgreSQL)
+
+```sql
+-- Engineer accounts (JWT auth — no external auth service)
+CREATE TABLE users (
+    id              SERIAL PRIMARY KEY,
+    email           VARCHAR(255) UNIQUE NOT NULL,
+    hashed_password VARCHAR(255) NOT NULL,
+    full_name       VARCHAR(100),
+    role            VARCHAR(20) DEFAULT 'engineer' CHECK (role IN ('engineer', 'admin')),
+    is_active       BOOLEAN DEFAULT true,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    last_login      TIMESTAMPTZ
+);
+
+CREATE INDEX users_email_idx ON users(email);
+
+-- Business unit dimension
+CREATE TABLE business_units (
+    id          SERIAL PRIMARY KEY,
+    code        VARCHAR(20) UNIQUE NOT NULL,  -- e.g. B1, B2
+    name        VARCHAR(100)
+);
+
+-- JIRA tickets with vector embeddings
+CREATE TABLE tickets (
+    id              SERIAL PRIMARY KEY,
+    jira_id         VARCHAR(50) UNIQUE NOT NULL,
+    business_unit   VARCHAR(20) REFERENCES business_units(code),
+    ticket_type     VARCHAR(20),  -- BUG, TASK, STORY, INCIDENT
+    summary         TEXT NOT NULL,
+    description     TEXT,
+    status          VARCHAR(50),
+    resolution      TEXT,
+    discussion      JSONB,        -- comment thread
+    created_at      TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ,
+    embedding       vector(768),  -- pgvector: text-embedding-004, 768-dim everywhere
+    raw_json        JSONB
+);
+
+-- Incident reports and RCAs
+CREATE TABLE incidents (
+    id              SERIAL PRIMARY KEY,
+    jira_id         VARCHAR(50) UNIQUE,
+    business_unit   VARCHAR(20),
+    title           TEXT NOT NULL,
+    description     TEXT,
+    root_cause      TEXT,
+    long_term_fix   TEXT,
+    related_tickets JSONB,        -- array of jira_ids
+    severity        VARCHAR(20),
+    resolved_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ,
+    embedding       vector(768),  -- pgvector: text-embedding-004, 768-dim everywhere
+CREATE INDEX tickets_embedding_idx ON tickets
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX incidents_embedding_idx ON incidents
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+-- Chat sessions
+CREATE TABLE chat_sessions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    engineer_id     VARCHAR(100) NOT NULL,
+    title           TEXT,
+    context_scope   JSONB,  -- { business_units: ["B1"], include_incidents: true }
+    messages        JSONB,  -- full conversation array
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX chat_sessions_engineer_idx ON chat_sessions(engineer_id, updated_at DESC);
+
+-- Feedback
+CREATE TABLE engineer_feedback (
+    id              SERIAL PRIMARY KEY,
+    session_id      UUID REFERENCES chat_sessions(id),
+    message_index   INT,
+    rating          VARCHAR(20) CHECK (rating IN ('correct','can_be_better','incorrect')),
+    comment         TEXT,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+```
+
+---
+
+## Agent Communication Pattern (Google ADK)
+
+```
+User Message + Context (BU, incident toggle, session_id)
+        │
+        ▼
+Orchestrator Agent
+  ├── classify_intent(message) → 'ticket_search' | 'jira_lookup' | 'status' | 'incident' | 'cross_ref'
+  ├── select_agent(intent) → L1L2ResolutionAgent | L3ResolutionsAgent
+  ├── delegate(agent, message, context)
+  │       └── Agent executes tool chain
+  ├── synthesize(results) → final response text
+  └── stream_response() → SSE to frontend
+```
+
+---
+
+## GCP Deployment Topology
+
+| Component | GCP Service | Notes |
+|---|---|---|
+| Frontend | Cloud Run | Container, min-instances=1 |
+| API Gateway | GCP API Gateway | OpenAPI spec-driven |
+| Agent Services | Cloud Run | 1 service per agent, autoscale |
+| Embedding Worker | Cloud Run Jobs | Triggered by Pub/Sub |
+| Scheduler | Cloud Scheduler | Daily full JIRA sync |
+| Database | Cloud SQL (PostgreSQL 15) | Private IP, pgvector extension |
+| Cache | Memorystore for Redis | Standard tier |
+| Object Storage | GCS | Multi-region bucket |
+| LLM + Embeddings | Vertex AI | Gemini 1.5 Pro + gecko-004 |
+| Secrets | Secret Manager | DB creds, JIRA API key |
+| Observability | Cloud Monitoring + Cloud Trace | Structured logging |
+| CI/CD | Cloud Build + Artifact Registry | Docker images |
+
+---
+
+## Security Considerations
+
+- All Cloud Run services use private ingress except the API Gateway endpoint
+- Service-to-service auth via Workload Identity
+- JIRA API key stored in Secret Manager
+- pgvector DB on private IP; agents connect via Cloud SQL Connector
+- JWT auth: engineer credentials stored in PostgreSQL (bcrypt hashed), tokens signed with JWT_SECRET_KEY
+- Passwords never stored in plain text — bcrypt hashing via passlib
+- JWT tokens expire after JWT_EXPIRY_HOURS (default 8h), refresh on activity
+- JWT middleware on API Gateway validates signed tokens on every request
+- All data stays within GCP project boundary
+
+---
+
+## Scalability Notes
+
+- Each agent is a stateless Cloud Run service — scales to zero when idle
+- pgvector HNSW index gives sub-10ms similarity search at millions of embeddings
+- Redis cache prevents duplicate JIRA API calls within session window
+- Embedding worker scales horizontally via Pub/Sub subscription concurrency
+- Sessions stored in PostgreSQL — engineers can resume from any device/session
