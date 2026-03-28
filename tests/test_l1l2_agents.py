@@ -23,7 +23,7 @@ try:
     tool_names = [t.__name__ if hasattr(t, '__name__') else str(t) 
                   for t in agent.tools]
     print(f"\nOK - Registered tools: {tool_names}")
-    assert len(agent.tools) == 5, f"Expected 5 tools, got {len(agent.tools)}"
+    assert len(agent.tools) == 4, f"Expected 4 tools, got {len(agent.tools)}"
 except Exception as e:
     print(f"FAIL - Tool check: {e}")
 

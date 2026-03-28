@@ -39,6 +39,13 @@ export interface BusinessUnitScope {
   include_incidents: boolean
 }
 
+/** Workspace mode; only support_engineer runs the full support stack today. */
+export type ChatMode =
+  | 'support_engineer'
+  | 'query_analyst'
+  | 'requirements'
+  | 'qa'
+
 // ── Token helpers ──────────────────────────────────────────────────────────────
 
 export function getToken(): string | null {
@@ -117,6 +124,7 @@ export async function* chatStream(
   message: string,
   sessionId: string | null,
   contextScope: BusinessUnitScope,
+  chatMode: ChatMode = 'support_engineer',
 ): AsyncGenerator<SSEEvent> {
   const token = getToken()
   const headers: Record<string, string> = {
@@ -128,7 +136,12 @@ export async function* chatStream(
   const res = await fetch(`${API_URL}/api/chat`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message, session_id: sessionId, context_scope: contextScope }),
+    body: JSON.stringify({
+      message,
+      session_id: sessionId,
+      context_scope: contextScope,
+      chat_mode: chatMode,
+    }),
   })
 
   if (!res.ok || !res.body) {

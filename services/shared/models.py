@@ -116,6 +116,15 @@ class Incident(BaseModel):
 # ── Chat & Session ─────────────────────────────────────────────────────────────
 
 
+class ChatMode(str, Enum):
+    """High-level chat workspace; only support_engineer runs the full ADK stack today."""
+
+    support_engineer = "support_engineer"
+    query_analyst = "query_analyst"
+    requirements = "requirements"
+    qa = "qa"
+
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
@@ -228,6 +237,7 @@ class AgentRequest(BaseModel):
     engineer_id: str
     message: str
     context_scope: BusinessUnitScope
+    chat_mode: ChatMode = ChatMode.support_engineer
     conversation_history: Optional[list[ChatMessage]] = None
 
 

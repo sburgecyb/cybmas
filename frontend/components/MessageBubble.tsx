@@ -98,9 +98,9 @@ export default function MessageBubble({ message, sessionId, messageIndex, isStre
         </div>
 
         {/* Sources */}
-        {message.sources && (
+        {message.sources && message.sources.length > 0 && (
           <div className="ml-8">
-            <SourcesPanel sources={message.sources} isVisible={!isStreaming} />
+            <SourcesPanel sources={message.sources} />
           </div>
         )}
 

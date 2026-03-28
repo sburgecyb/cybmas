@@ -5,13 +5,12 @@ import type { SearchResult } from '@/lib/api'
 
 interface Props {
   sources: SearchResult[]
-  isVisible: boolean
 }
 
-export default function SourcesPanel({ sources, isVisible }: Props) {
+export default function SourcesPanel({ sources }: Props) {
   const [open, setOpen] = useState(false)
 
-  if (!isVisible || sources.length === 0) return null
+  if (sources.length === 0) return null
 
   return (
     <div className="mt-3 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">

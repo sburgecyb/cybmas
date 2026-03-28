@@ -13,7 +13,11 @@ from fastapi.responses import StreamingResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from services.api_gateway.middleware.auth_middleware import get_current_engineer  # noqa: E402
-from services.shared.models import AgentRequest, BusinessUnitScope  # noqa: E402
+from services.shared.models import (
+    AgentRequest,
+    BusinessUnitScope,
+    ChatMode,
+)  # noqa: E402
 
 log = structlog.get_logger()
 
@@ -87,23 +91,34 @@ async def chat(
         message: Engineer's question or request.
         session_id: Optional UUID to continue an existing conversation.
         context_scope: Business unit selection and incident-mode flag.
+        chat_mode: Optional workspace mode (default: support_engineer).
     """
     body = await request.json()
 
     session_id_str: str = body.get("session_id") or str(uuid.uuid4())
     context_scope = BusinessUnitScope(**body["context_scope"])
+    raw_mode = body.get("chat_mode") or "support_engineer"
+    try:
+        chat_mode = ChatMode(raw_mode)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid chat_mode: {raw_mode!r}",
+        )
 
     agent_request = AgentRequest(
         session_id=uuid.UUID(session_id_str),
         engineer_id=caller["engineer_id"],
         message=body["message"],
         context_scope=context_scope,
+        chat_mode=chat_mode,
     )
 
     log.info(
         "chat.request",
         engineer_id=caller["engineer_id"],
         session_id=session_id_str,
+        chat_mode=chat_mode.value,
     )
 
     return StreamingResponse(

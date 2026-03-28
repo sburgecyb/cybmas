@@ -34,6 +34,32 @@ def _score_result(query_words: set[str], result: dict) -> float:
     return base_score + keyword_bonus + status_bonus
 
 
+def apply_keyword_rerank(
+    query_text: str,
+    results: list[dict],
+    top_n: int,
+) -> list[dict]:
+    """Re-order vector hits by keyword overlap + resolved bonus (in-process).
+
+    Used by ``search_tickets`` so the model does not need a second tool call.
+    """
+    if not results or top_n <= 0:
+        return []
+    query_words = set(query_text.lower().split())
+    reranked = sorted(
+        results,
+        key=lambda r: _score_result(query_words, r),
+        reverse=True,
+    )
+    out = reranked[:top_n]
+    log.info(
+        "apply_keyword_rerank.complete",
+        input_count=len(results),
+        output_count=len(out),
+    )
+    return out
+
+
 def rerank_results(
     query_text: str,
     results: list[dict],
@@ -56,19 +82,14 @@ def rerank_results(
         if not results:
             return ToolResult(success=True, data=[]).model_dump()
 
-        query_words = set(query_text.lower().split())
-        reranked = sorted(
-            results,
-            key=lambda r: _score_result(query_words, r),
-            reverse=True,
-        )
+        reranked = apply_keyword_rerank(query_text, results, top_n)
 
         log.info(
             "rerank_results.complete",
             input_count=len(results),
-            output_count=min(top_n, len(reranked)),
+            output_count=len(reranked),
         )
-        return ToolResult(success=True, data=reranked[:top_n]).model_dump()
+        return ToolResult(success=True, data=reranked).model_dump()
 
     except Exception as exc:
         log.error("rerank_results.failed", error=str(exc))

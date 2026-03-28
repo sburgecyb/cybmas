@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { chatStream, getSessionMessages } from '@/lib/api'
-import type { ChatMessage, BusinessUnitScope } from '@/lib/api'
+import type { ChatMessage, BusinessUnitScope, ChatMode } from '@/lib/api'
 import MessageBubble from './MessageBubble'
 import BusinessUnitSelector from './BusinessUnitSelector'
 import IncidentToggle from './IncidentToggle'
+import ChatModeSelector from './ChatModeSelector'
 
 interface Props {
   initialSessionId?: string
@@ -22,6 +23,7 @@ export default function ChatWindow({ initialSessionId, engineerId }: Props) {
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null)
   const [selectedBUs, setSelectedBUs] = useState<string[]>(['B1', 'B2'])
   const [incidentsEnabled, setIncidentsEnabled] = useState(false)
+  const [chatMode, setChatMode] = useState<ChatMode>('support_engineer')
   const [loadingHistory, setLoadingHistory] = useState(false)
 
   // Load existing session messages
@@ -64,7 +66,7 @@ export default function ChatWindow({ initialSessionId, engineerId }: Props) {
     }
 
     try {
-      const stream = chatStream(text, sessionId, scope)
+      const stream = chatStream(text, sessionId, scope, chatMode)
       for await (const event of stream) {
         if (event.type === 'token' && event.content) {
           setMessages(prev => {
@@ -128,7 +130,10 @@ export default function ChatWindow({ initialSessionId, engineerId }: Props) {
       {/* Context controls */}
       <div className="px-4 py-2.5 border-b border-gray-200 dark:border-gray-800
                       bg-white dark:bg-gray-900 flex flex-wrap items-center gap-4">
-        <BusinessUnitSelector selected={selectedBUs} onChange={setSelectedBUs} />
+        <ChatModeSelector value={chatMode} onChange={setChatMode} />
+        <div className="border-l border-gray-200 dark:border-gray-700 pl-4">
+          <BusinessUnitSelector selected={selectedBUs} onChange={setSelectedBUs} />
+        </div>
         <div className="border-l border-gray-200 dark:border-gray-700 pl-4">
           <IncidentToggle enabled={incidentsEnabled} onChange={setIncidentsEnabled} />
         </div>
