@@ -1,7 +1,26 @@
+# cybmas Orchestrator — ADK + FastAPI (/process SSE).
+#
+# Build from the REPOSITORY ROOT (monorepo imports: services.*, pipeline.*):
+#   docker build -f services/orchestrator/Dockerfile -t cybmas-orchestrator .
+#
 FROM python:3.11-slim
+
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY services/orchestrator/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Paths must match sys.path / Path(__file__) layout (repo root = /app).
+COPY services /app/services
+COPY pipeline /app/pipeline
+
 EXPOSE 8001
-CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8001"]
+
+CMD ["uvicorn", "services.orchestrator.server:app", "--host", "0.0.0.0", "--port", "8001"]

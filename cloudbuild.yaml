@@ -1,0 +1,55 @@
+# Cloud Build: build and push API gateway + orchestrator.
+# Prereq: Artifact Registry repo (default name: cybmas) in ${_REGION}.
+#
+# Bash / Cloud Shell:
+#   gcloud builds submit --config=cloudbuild.yaml --substitutions=_TAG=dev-1 .
+#
+# Windows PowerShell (quote the whole substitutions value — commas break parsing):
+#   gcloud builds submit --config=cloudbuild.yaml --substitutions="_TAG=dev-1" .
+#
+# Defaults below: us-central1, cybmas, latest — omit --substitutions to use them.
+
+substitutions:
+  _REGION: us-central1
+  _REPO: cybmas
+  _TAG: latest
+
+steps:
+  - id: build-api-gateway
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - services/api_gateway/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/api-gateway:${_TAG}
+      - .
+
+  - id: build-orchestrator
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - services/orchestrator/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/orchestrator:${_TAG}
+      - .
+
+  - id: push-api-gateway
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/api-gateway:${_TAG}
+
+  - id: push-orchestrator
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/orchestrator:${_TAG}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/api-gateway:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/orchestrator:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

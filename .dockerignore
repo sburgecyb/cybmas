@@ -1,0 +1,21 @@
+# Used when build context is the repository root (API gateway, orchestrator).
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.env
+.env.local
+.env.*.local
+keys/
+node_modules
+frontend/.next
+frontend/node_modules
+.cursor
+*.md
+!README.md
+infra/.terraform
+*.tfstate*

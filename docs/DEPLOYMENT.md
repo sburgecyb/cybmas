@@ -84,11 +84,11 @@ One Cloud Run Job:
 
 | Pipeline File | Trigger | Environment | Purpose |
 |---|---|---|---|
-| `cloudbuild.yaml` | Push to `main` | Production | Full test + deploy |
-| `cloudbuild.dev.yaml` | Push to `develop` | Dev | Fast deploy |
-| `cloudbuild.infra.yaml` | Manual only | Any | Terraform apply |
-| `cloudbuild.pipeline.yaml` | Cloud Scheduler / manual | Production | JIRA full sync |
-| `cloudbuild.rollback.yaml` | Manual only | Production | Emergency rollback |
+| `cloudbuild.yaml` | `gcloud builds submit` or Cloud Build trigger | Any | Build & push **api-gateway** + **orchestrator** to Artifact Registry (`deploy/README.md`) |
+| `cloudbuild.dev.yaml` | Push to `develop` | Dev | Fast deploy *(add when needed)* |
+| `cloudbuild.infra.yaml` | Manual only | Any | Terraform apply *(add when needed)* |
+| `cloudbuild.pipeline.yaml` | Cloud Scheduler / manual | Production | JIRA full sync *(add when needed)* |
+| `cloudbuild.rollback.yaml` | Manual only | Production | Emergency rollback *(add when needed)* |
 
 ---
 
