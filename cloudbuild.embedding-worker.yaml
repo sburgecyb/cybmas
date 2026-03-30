@@ -1,0 +1,35 @@
+# Optional: build + push only the JIRA → pgvector embedding worker (Cloud Run Job image).
+# Does not run on the default GitHub Actions path — invoke when you need the pipeline image.
+#
+# From repo root:
+#   gcloud builds submit --config=cloudbuild.embedding-worker.yaml --substitutions=_TAG=abc1234 .
+#
+# Same substitutions as root cloudbuild: _REGION, _REPO, _TAG (defaults: us-central1, cybmas, latest).
+
+substitutions:
+  _REGION: us-central1
+  _REPO: cybmas
+  _TAG: latest
+
+steps:
+  - id: build-embedding-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - pipeline/embedding_worker/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/embedding-worker:${_TAG}
+      - .
+
+  - id: push-embedding-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/embedding-worker:${_TAG}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/embedding-worker:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
