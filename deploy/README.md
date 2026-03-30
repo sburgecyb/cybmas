@@ -375,8 +375,194 @@ Skip if policy forbids Docker.
 
 ---
 
+## CI/CD — GitHub Actions → Cloud Build → Cloud Run (**Dev**)
+
+The workflow **`.github/workflows/gcp-deploy.yml`** is **Dev-only** for now:
+
+- **Push to `main`** — Cloud Build (root `cloudbuild.yaml`) then deploy images to Dev Cloud Run.
+- **Actions → Run workflow** — same steps without a new commit (manual redeploy).
+
+Deploy steps only update the **container image** (`gcloud run deploy … --image=…`). VPC connector, secrets, service accounts, and env vars stay as you already set on each service (Phases 4–6).
+
+**Prereq:** Dev Cloud Run services **`cybmas-api`**, **`cybmas-orchestrator`**, **`cybmas-frontend`** must exist once (first deploy via CLI as in this doc). CI then rolls new revisions only.
+
+### 1. GitHub — Secrets and variables
+
+**Secrets** (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|--------|--------|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full provider name, e.g. `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github` |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | Service account email for OIDC (see §2) |
+
+**Variables:**
+
+| Variable | Required | Note |
+|----------|----------|------|
+| `GCP_PROJECT_DEV` | Yes | Dev GCP project ID |
+| `DEV_API_GATEWAY_URL` | Yes | HTTPS base URL of dev **`cybmas-api`** (no trailing slash); baked into the frontend build |
+| `GCP_REGION` | No | Defaults to `us-central1` in the workflow |
+| `ARTIFACT_REGISTRY_REPO` | No | Defaults to `cybmas` |
+| `CLOUD_RUN_SERVICE_*_DEV` | No | Only if your Dev service names differ from `cybmas-api`, `cybmas-orchestrator`, `cybmas-frontend` |
+
+### 2. Workload Identity Federation (Dev project)
+
+Use your **Dev** `PROJECT_ID` below. This avoids storing a JSON key in GitHub.
+
+**Where to run:** Any shell with `gcloud` installed and logged in (`gcloud auth login`) as a user who can manage IAM on the dev project. **Google Cloud Shell** uses **bash** (first block below). On **Windows PowerShell**, `export` does not exist — use the **PowerShell** block instead (or use **WSL / Git Bash** and run the bash script).
+
+**Bash (Cloud Shell, WSL, Git Bash)**
+
+```bash
+export PROJECT_ID=YOUR_DEV_GCP_PROJECT_ID
+export PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+export POOL=github
+export PROVIDER=github
+export REPO="GITHUB_ORG/GITHUB_REPO"   # e.g. acme/cybmas — must match this repo on GitHub (case-sensitive)
+
+# One line per gcloud — trailing `\` is bash-only; do not paste those lines into PowerShell.
+gcloud iam workload-identity-pools create "$POOL" --location="global" --project="$PROJECT_ID" --display-name="GitHub"
+
+# GitHub OIDC: GCP requires --attribute-condition to reference a JWT claim (see deployment-pipelines conditions).
+# Restrict to one repo (recommended). For all repos under an org: assertion.repository_owner=='your-org'
+gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" --location="global" --project="$PROJECT_ID" --workload-identity-pool="$POOL" --display-name="GitHub provider" --issuer-uri="https://token.actions.githubusercontent.com" --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" --attribute-condition="assertion.repository=='${REPO}'"
+
+export GHA_SA="github-actions-cybmas@${PROJECT_ID}.iam.gserviceaccount.com"
+# If this errors with ALREADY_EXISTS, continue to the next command.
+gcloud iam service-accounts create github-actions-cybmas --project="$PROJECT_ID" --display-name="GitHub Actions cybmas"
+
+gcloud iam service-accounts add-iam-policy-binding "$GHA_SA" --project="$PROJECT_ID" --role="roles/iam.workloadIdentityUser" --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/attribute.repository/${REPO}"
+```
+
+**Already ran `create-oidc` without `--attribute-condition`?** Delete the provider, then run `create-oidc` again with the line above (pool and SA can stay):
+
+`gcloud iam workload-identity-pools providers delete "$PROVIDER" --location=global --workload-identity-pool="$POOL" --project="$PROJECT_ID"`
+
+**PowerShell (Windows)** — set your project and GitHub repo, then run the whole block.
+
+**Do not** paste the **bash** script into **Windows PowerShell 5.1**: bash uses `\` line continuations and operators like **`||`** / **`&&`**, which PowerShell 5.1 does not support (you may see **`The token '||' is not a valid statement separator`**). Use the **PowerShell** block below, or **PowerShell 7+**, or **Cloud Shell / WSL / Git Bash** for the bash block.
+
+If you see **`WORKLOAD_IDENTITY_POOL must be specified`**, the pool name was not passed to `create`.
+
+**PowerShell line continuation:** put a **backtick** (`` ` ``) as the **last character** on the line—**no space after it**—then continue the command on the next line.
+
+```powershell
+$PROJECT_ID = "YOUR_DEV_GCP_PROJECT_ID"
+$PROJECT_NUMBER = gcloud projects describe $PROJECT_ID --format="value(projectNumber)"
+$POOL = "github"
+$PROVIDER = "github"
+$REPO = "GITHUB_ORG/GITHUB_REPO"   # e.g. acme/cybmas
+
+gcloud iam workload-identity-pools create github `
+  --location=global `
+  --project=$PROJECT_ID `
+  --display-name="GitHub"
+
+# Must include --attribute-condition (same REPO as $REPO). Org-wide: assertion.repository_owner=='your-org'
+gcloud iam workload-identity-pools providers create-oidc github `
+  --location=global `
+  --project=$PROJECT_ID `
+  --workload-identity-pool=$POOL `
+  --display-name="GitHub provider" `
+  --issuer-uri="https://token.actions.githubusercontent.com" `
+  --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" `
+  --attribute-condition="assertion.repository=='$REPO'"
+
+$GHA_SA = "github-actions-cybmas@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud iam service-accounts create github-actions-cybmas `
+  --project=$PROJECT_ID `
+  --display-name="GitHub Actions cybmas" 2>$null
+
+$member = "principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL/attribute.repository/$REPO"
+gcloud iam service-accounts add-iam-policy-binding $GHA_SA `
+  --project=$PROJECT_ID `
+  --role="roles/iam.workloadIdentityUser" `
+  --member=$member
+
+# Project-level roles (Cloud Build submit, source upload, Cloud Run deploy)
+foreach ($ROLE in @("roles/cloudbuild.builds.editor", "roles/storage.objectAdmin", "roles/run.developer")) {
+  gcloud projects add-iam-policy-binding $PROJECT_ID `
+    --member="serviceAccount:$GHA_SA" `
+    --role=$ROLE
+}
+
+# Act as each Cloud Run *runtime* service account (the SA each service runs as — not the GitHub SA).
+# Each array entry must be ONE valid email only — the exact string from `gcloud run services describe ...` (see below).
+# Do NOT concatenate two addresses (wrong: name@project.iam...@${PROJECT_ID}.iam... — that causes INVALID_ARGUMENT).
+# If all three services use the same SA, list that single email once and run one binding, or use an array of one element.
+$runtimeSas = @(
+  "YOUR_GATEWAY_SA@${PROJECT_ID}.iam.gserviceaccount.com",
+  "YOUR_ORCHESTRATOR_SA@${PROJECT_ID}.iam.gserviceaccount.com",
+  "YOUR_FRONTEND_SA@${PROJECT_ID}.iam.gserviceaccount.com"
+)
+foreach ($RUNTIME_SA in $runtimeSas) {
+  gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA `
+    --project=$PROJECT_ID `
+    --member="serviceAccount:$GHA_SA" `
+    --role="roles/iam.serviceAccountUser"
+}
+```
+
+**Examples of valid `$runtimeSas` entries** (pick one style; each string is a single email):
+
+- Custom SAs in project `myproj`: `cybmas-api@myproj.iam.gserviceaccount.com` (substitute only `YOUR_*` / project id — **one** `@` domain).
+- Default compute SA (from `describe`): `566370119486-compute@developer.gserviceaccount.com` — use **as-is**, with **no** extra `@project.iam.gserviceaccount.com` appended.
+
+**PowerShell — print the three runtime emails** (then copy each into `$runtimeSas`):
+
+```powershell
+$REGION = "us-central1"
+foreach ($svc in @("cybmas-api", "cybmas-orchestrator", "cybmas-frontend")) {
+  gcloud run services describe $svc --region=$REGION --project=$PROJECT_ID --format="value(spec.template.spec.serviceAccountName)"
+}
+```
+
+Grant **`$GHA_SA`** on the **Dev** project (bash — same shell as the bash WIF script above):
+
+```bash
+# Project-level roles (Cloud Build submit, source upload bucket, Cloud Run deploy)
+for ROLE in roles/cloudbuild.builds.editor roles/storage.objectAdmin roles/run.developer; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:${GHA_SA}" \
+    --role="$ROLE"
+done
+```
+
+**`roles/iam.serviceAccountUser`** is not only at project scope: GitHub Actions must be allowed to **act as** each **runtime** service account attached to your Cloud Run services.
+
+**What is `YOUR_GATEWAY_SA`?** A placeholder for the **service account name** (the part before `@`) used by **`cybmas-api`** in Cloud Run — not a fixed GCP string. Same pattern: **`YOUR_ORCHESTRATOR_SA`** → **`cybmas-orchestrator`**’s SA, **`YOUR_FRONTEND_SA`** → **`cybmas-frontend`**’s SA. Look them up under Cloud Run → each service → **Security** → Service account, or: `gcloud run services describe SERVICE --region=REGION --project=PROJECT_ID --format='value(spec.template.spec.serviceAccountName)'`. If a service uses the **default compute** account, the email ends with **`@developer.gserviceaccount.com`** — use that full value in the loop, not the `...@PROJECT_ID.iam.gserviceaccount.com` pattern.
+
+```bash
+# Example — repeat for gateway, orchestrator, frontend if they use different runtime SAs
+for RUNTIME_SA in \
+  "YOUR_GATEWAY_SA@${PROJECT_ID}.iam.gserviceaccount.com" \
+  "YOUR_ORCHESTRATOR_SA@${PROJECT_ID}.iam.gserviceaccount.com" \
+  "YOUR_FRONTEND_SA@${PROJECT_ID}.iam.gserviceaccount.com"
+do
+  gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${GHA_SA}" \
+    --role="roles/iam.serviceAccountUser"
+done
+```
+
+If all three services share **one** compute service account, a single `add-iam-policy-binding` on that account is enough.
+
+Ensure the **Cloud Build default service account** can push to Artifact Registry (Phase 2).
+
+### 3. Artifact Registry (Dev)
+
+The **cybmas** Docker repository must exist in the Dev project and region (Phase 2). `gcloud builds submit` uses `--project=$GCP_PROJECT_DEV`.
+
+### 4. Production (later)
+
+A separate prod pipeline (second project, `cybmas-prod-*` services, GitHub Environment approval) can be added when you are ready; it is not in the workflow yet.
+
+---
+
 ## Changelog
 
+- **CI/CD:** `.github/workflows/gcp-deploy.yml` — **Dev only:** push **`main`** or manual **Run workflow** → Cloud Build + Dev Cloud Run.
 - **Phase 6 / `cloudbuild.yaml`:** **`frontend`** image; **`_NEXT_PUBLIC_API_URL`**; redeploy **`cybmas-api`** with **`CORS_ORIGINS`** = frontend URL.
 - **Phase 5b:** Run migrations/seeds against **Cloud SQL** via Auth Proxy + TCP `DATABASE_URL` (not the `/cloudsql/` socket URL from your laptop).
 - **Phase 3b:** Memorystore Redis + Serverless VPC Access connector; Cloud Run uses `--vpc-connector` + `--vpc-egress=private-ranges-only` + Secret `redis_url`.

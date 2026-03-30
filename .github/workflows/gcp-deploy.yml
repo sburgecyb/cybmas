@@ -32,6 +32,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Fails fast if repo secrets are missing (auth@v2 errors are vague when WIF is empty).
+      - name: Check GCP auth secrets exist
+        env:
+          WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SA: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+        run: |
+          if [ -z "$WIF" ]; then
+            echo "::error::Repository secret GCP_WORKLOAD_IDENTITY_PROVIDER is empty or not set."
+            echo "Add it under Settings → Secrets and variables → Actions → Secrets (exact name, full provider resource name from gcloud)."
+            exit 1
+          fi
+          if [ -z "$SA" ]; then
+            echo "::error::Repository secret GCP_SERVICE_ACCOUNT_EMAIL is empty or not set."
+            exit 1
+          fi
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
