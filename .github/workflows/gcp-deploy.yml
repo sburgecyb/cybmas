@@ -1,0 +1,78 @@
+# Dev only: Cloud Build → Artifact Registry → Cloud Run (cybmas-api, cybmas-orchestrator, cybmas-frontend).
+#
+# - Push to `main` or `master`: build and deploy to Dev.
+# - workflow_dispatch: same pipeline (e.g. redeploy without a new commit).
+#
+# Secrets / Variables: deploy/README.md § CI/CD (Dev).
+
+name: GCP build and deploy (Dev)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: gcp-deploy-dev-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGION: ${{ vars.GCP_REGION != '' && vars.GCP_REGION || 'us-central1' }}
+  AR_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO != '' && vars.ARTIFACT_REGISTRY_REPO || 'cybmas' }}
+
+jobs:
+  deploy-development:
+    name: Build and deploy (Dev)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Image tag
+        id: tag
+        run: echo "tag=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Cloud Build (images → Artifact Registry)
+        run: |
+          gcloud builds submit --config=cloudbuild.yaml \
+            --project="${{ vars.GCP_PROJECT_DEV }}" \
+            --substitutions=_TAG=${{ steps.tag.outputs.tag }},_REGION=${{ env.REGION }},_REPO=${{ env.AR_REPO }},_NEXT_PUBLIC_API_URL=${{ vars.DEV_API_GATEWAY_URL }} \
+            .
+
+      - name: Deploy Cloud Run (Dev)
+        env:
+          SVC_API: ${{ vars.CLOUD_RUN_SERVICE_API_DEV != '' && vars.CLOUD_RUN_SERVICE_API_DEV || 'cybmas-api' }}
+          SVC_ORCH: ${{ vars.CLOUD_RUN_SERVICE_ORCH_DEV != '' && vars.CLOUD_RUN_SERVICE_ORCH_DEV || 'cybmas-orchestrator' }}
+          SVC_FE: ${{ vars.CLOUD_RUN_SERVICE_FRONTEND_DEV != '' && vars.CLOUD_RUN_SERVICE_FRONTEND_DEV || 'cybmas-frontend' }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          PROJ="${{ vars.GCP_PROJECT_DEV }}"
+          REG="${{ env.REGION }}"
+          REPO="${{ env.AR_REPO }}"
+          deploy_one() {
+            local svc="$1"
+            local image_name="$2"
+            gcloud run deploy "$svc" \
+              --image="${REG}-docker.pkg.dev/${PROJ}/${REPO}/${image_name}:${TAG}" \
+              --region="$REG" \
+              --platform=managed \
+              --project="$PROJ" \
+              --quiet
+          }
+          deploy_one "$SVC_API" api-gateway
+          deploy_one "$SVC_ORCH" orchestrator
+          deploy_one "$SVC_FE" frontend
