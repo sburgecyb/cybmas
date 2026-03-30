@@ -23,6 +23,8 @@ env:
 jobs:
   deploy-development:
     name: Build and deploy (Dev)
+    # Use this GitHub Environment name if WIF / project vars live under Environments (not only repository secrets).
+    environment: GCP_CICD
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -38,13 +40,16 @@ jobs:
           WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           SA: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
         run: |
+          echo "Repository for this run: ${{ github.repository }} (event: ${{ github.event_name }})"
+          echo "Repository secrets apply only here. If this is a fork (your-user/cybmas), define secrets on the fork or push to the upstream repo where secrets exist."
           if [ -z "$WIF" ]; then
-            echo "::error::Repository secret GCP_WORKLOAD_IDENTITY_PROVIDER is empty or not set."
-            echo "Add it under Settings → Secrets and variables → Actions → Secrets (exact name, full provider resource name from gcloud)."
+            echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER is empty in this run."
+            echo "Fix: Add it under THIS repo → Settings → Secrets and variables → Actions → Secrets (not only on a fork parent)."
+            echo "PRs from forks and some automated PRs do not receive secrets — merge via a branch on this repo or use Run workflow on the default branch."
             exit 1
           fi
           if [ -z "$SA" ]; then
-            echo "::error::Repository secret GCP_SERVICE_ACCOUNT_EMAIL is empty or not set."
+            echo "::error::GCP_SERVICE_ACCOUNT_EMAIL is empty in this run."
             exit 1
           fi
 

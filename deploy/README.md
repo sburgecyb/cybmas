@@ -405,6 +405,13 @@ Deploy steps only update the **container image** (`gcloud run deploy … --image
 | `ARTIFACT_REGISTRY_REPO` | No | Defaults to `cybmas` |
 | `CLOUD_RUN_SERVICE_*_DEV` | No | Only if your Dev service names differ from `cybmas-api`, `cybmas-orchestrator`, `cybmas-frontend` |
 
+**Secrets “not found” in Actions though they exist in Settings**
+
+- GitHub only injects **repository** Actions secrets into runs for that **same** repository. Open the failed run: the title shows **`owner/repo`** — secrets must be defined on **that** repo. If you push to a **fork**, the workflow runs on the **fork**; the fork has **no** copies of your upstream secrets unless you add them there (or push to upstream instead).
+- **Pull requests from forks** do not receive secrets (the message you saw). This workflow is triggered by **push** to `main`/`master` and **workflow_dispatch**, not by `pull_request`. If you later add `pull_request`, the same fork rule applies to those runs.
+- Secrets stored only under a GitHub **Environment** are used only if the job declares `environment: that-name`. The workflow sets **`environment: GCP_CICD`** so secrets/variables on that environment are loaded. Rename the environment in GitHub or change that line to match (e.g. `Dev`). If **`GCP_CICD`** has **required reviewers**, every run waits for approval—clear that for automatic Dev deploys, or use repository secrets only and remove `environment:` from the workflow.
+- **Dependabot** uses separate **Dependabot** secrets, not the Actions secrets above.
+
 ### 2. Workload Identity Federation (Dev project)
 
 Use your **Dev** `PROJECT_ID` below. This avoids storing a JSON key in GitHub.
@@ -491,9 +498,9 @@ foreach ($ROLE in @("roles/cloudbuild.builds.editor", "roles/storage.objectAdmin
 # Do NOT concatenate two addresses (wrong: name@project.iam...@${PROJECT_ID}.iam... — that causes INVALID_ARGUMENT).
 # If all three services use the same SA, list that single email once and run one binding, or use an array of one element.
 $runtimeSas = @(
-  "YOUR_GATEWAY_SA@${PROJECT_ID}.iam.gserviceaccount.com",
-  "YOUR_ORCHESTRATOR_SA@${PROJECT_ID}.iam.gserviceaccount.com",
-  "YOUR_FRONTEND_SA@${PROJECT_ID}.iam.gserviceaccount.com"
+  "cybmas-api@cybmas.iam.gserviceaccount.com",
+  "cybmas-orchestrator@cybmas.iam.gserviceaccount.com",
+  "566370119486-compute@developer.gserviceaccount.com"
 )
 foreach ($RUNTIME_SA in $runtimeSas) {
   gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA `
