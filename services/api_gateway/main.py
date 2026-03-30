@@ -7,9 +7,11 @@ Responsibilities:
   (via the Orchestrator) and stream responses back as SSE
 - Session and feedback persistence delegated to downstream services
 """
+import asyncio
 import os
+import re
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import asyncpg
@@ -57,21 +59,52 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Open the HTTP port immediately; connect DB/Redis in the background.
+
+    Uvicorn only starts listening after lifespan yields. A slow or stuck
+    ``create_pool`` (e.g. Cloud SQL socket misconfiguration) would otherwise
+    exceed Cloud Run's startup probe timeout.
+    """
     import redis.asyncio as aioredis
 
-    dsn = os.getenv("DATABASE_URL", "").replace(
-        "postgresql+asyncpg://", "postgresql://"
-    )
-    app.state.db_pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
-    app.state.redis = aioredis.from_url(
-        os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
-    )
-    log.info("api_gateway.started")
+    app.state.db_pool = None
+    app.state.redis = None
+    app.state.backends_ready = asyncio.Event()
+
+    async def _connect_backends() -> None:
+        dsn = os.getenv("DATABASE_URL", "").replace(
+            "postgresql+asyncpg://", "postgresql://"
+        )
+        try:
+            if dsn.strip():
+                app.state.db_pool = await asyncpg.create_pool(
+                    dsn, min_size=2, max_size=10
+                )
+            else:
+                log.error("api_gateway.missing_database_url")
+        except Exception as exc:
+            log.exception("api_gateway.db_pool_failed", error=str(exc))
+        try:
+            app.state.redis = aioredis.from_url(
+                os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
+            )
+        except Exception as exc:
+            log.exception("api_gateway.redis_client_failed", error=str(exc))
+        log.info("api_gateway.backends_init_finished")
+        app.state.backends_ready.set()
+
+    init_task = asyncio.create_task(_connect_backends())
+    log.info("api_gateway.listening_pending_backends")
 
     yield
 
-    await app.state.db_pool.close()
-    await app.state.redis.aclose()
+    init_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await init_task
+    if app.state.db_pool is not None:
+        await app.state.db_pool.close()
+    if app.state.redis is not None:
+        await app.state.redis.aclose()
     log.info("api_gateway.stopped")
 
 
@@ -84,16 +117,49 @@ app = FastAPI(
 )
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
+# Starlette returns HTTP 400 on preflight (OPTIONS) if Origin is not allowed — exact
+# string match on allow_origins, unless CORS_ORIGIN_REGEX full-matches (see .env.example).
 
-_origins = [
-    o.strip()
-    for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
-    if o.strip()
-]
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    out: list[str] = []
+    for part in raw.split(","):
+        o = part.strip()
+        if not o:
+            continue
+        while o.endswith("/"):
+            o = o[:-1]
+        out.append(o)
+    return out
+
+
+_origins = _parse_cors_origins(os.getenv("CORS_ORIGINS", "http://localhost:3000"))
+_cors_regex = (os.getenv("CORS_ORIGIN_REGEX") or "").strip() or None
+_cors_pattern = re.compile(_cors_regex) if _cors_regex else None
+
+
+def cors_headers_for_request(request: Request) -> dict[str, str]:
+    """Mirror CORSMiddleware allow-list so error responses still get ACAO (browser won't hide 500 as CORS)."""
+    origin = request.headers.get("origin")
+    if not origin:
+        return {}
+    if origin in _origins:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    if _cors_pattern is not None and _cors_pattern.fullmatch(origin):
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    return {}
+
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=_cors_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -138,6 +204,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error"},
+        headers=cors_headers_for_request(request),
     )
 
 

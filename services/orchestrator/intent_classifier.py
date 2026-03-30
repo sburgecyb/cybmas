@@ -62,7 +62,27 @@ class IntentType(str, Enum):
 
 # ── Keyword patterns ───────────────────────────────────────────────────────────
 
-JIRA_ID_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
+# Case-insensitive so "b1-1001" still routes to JIRA path (uppercase-only pattern missed most pastes).
+JIRA_ID_PATTERN = re.compile(r"\b[a-zA-Z][a-zA-Z0-9]*-\d+\b")
+
+
+def normalize_message_for_jira_key_scan(message: str) -> str:
+    """Normalize text so pasted JIRA keys still match (Unicode dashes, BOM, ZWSP)."""
+    s = (
+        message.replace("\ufeff", "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+    )
+    for bad, good in (
+        ("\u2212", "-"),  # minus sign
+        ("\u2011", "-"),  # non-breaking hyphen
+        ("\u2010", "-"),  # hyphen
+        ("\u2013", "-"),  # en dash
+        ("\u2014", "-"),  # em dash
+    ):
+        s = s.replace(bad, good)
+    return s
 
 _STATUS_KEYWORDS: list[str] = [
     "status of", "what is the status", "is it resolved", "who is assigned",
@@ -162,7 +182,7 @@ async def classify_intent(
         The matching IntentType.
     """
     # ── 0. JIRA ID check — highest priority, no cache needed ──────────────────
-    if JIRA_ID_PATTERN.search(message):
+    if JIRA_ID_PATTERN.search(normalize_message_for_jira_key_scan(message)):
         log.info(
             "intent_classifier.classified",
             intent=IntentType.JIRA_LOOKUP.value,

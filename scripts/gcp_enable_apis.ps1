@@ -15,7 +15,9 @@ $apis = @(
     "secretmanager.googleapis.com",
     "aiplatform.googleapis.com",
     "sqladmin.googleapis.com",
-    "redis.googleapis.com"
+    "redis.googleapis.com",
+    "vpcaccess.googleapis.com",
+    "compute.googleapis.com"
 )
 
 Write-Host "Enabling APIs on project $ProjectId ..."

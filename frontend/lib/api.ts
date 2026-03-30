@@ -1,4 +1,10 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+/** Base URL for the API gateway (no trailing slash). Trims env to avoid bad fetches from accidental spaces in build args. */
+function apiBaseUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  return raw.trim().replace(/\/+$/, '')
+}
+
+const API_URL = apiBaseUrl()
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -87,6 +93,19 @@ async function apiRequest(
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
+function formatErrorDetail(status: number, body: unknown): string {
+  if (body && typeof body === 'object' && 'detail' in body) {
+    const d = (body as { detail: unknown }).detail
+    if (Array.isArray(d)) {
+      return d
+        .map((e: { msg?: string; loc?: unknown }) => e.msg ?? JSON.stringify(e))
+        .join('; ')
+    }
+    if (typeof d === 'string') return d
+  }
+  return `HTTP ${status}`
+}
+
 export async function login(
   email: string,
   password: string,
@@ -94,11 +113,17 @@ export async function login(
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email: email.trim(), password }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail ?? 'Login failed')
+    const raw = await res.text()
+    let parsed: unknown
+    try {
+      parsed = raw ? JSON.parse(raw) : {}
+    } catch {
+      parsed = { detail: raw || res.statusText }
+    }
+    throw new Error(formatErrorDetail(res.status, parsed))
   }
   return res.json()
 }

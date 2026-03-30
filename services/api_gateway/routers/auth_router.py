@@ -4,7 +4,7 @@ import sys
 
 import asyncpg
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from services.api_gateway.auth import (  # noqa: E402
@@ -15,6 +15,7 @@ from services.api_gateway.auth import (  # noqa: E402
     update_last_login,
     verify_password,
 )
+from services.api_gateway.deps import get_db_pool  # noqa: E402
 from services.api_gateway.middleware.auth_middleware import get_current_engineer  # noqa: E402
 from services.shared.models import TokenResponse, UserCreate, UserLogin  # noqa: E402
 
@@ -23,20 +24,13 @@ log = structlog.get_logger()
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-# ── Shared dependency ──────────────────────────────────────────────────────────
-
-
-async def get_pool(request: Request) -> asyncpg.Pool:
-    return request.app.state.db_pool
-
-
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: UserLogin,
-    pool: asyncpg.Pool = Depends(get_pool),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TokenResponse:
     user = await get_user_by_email(pool, body.email)
 
@@ -68,7 +62,7 @@ async def login(
 @router.post("/register")
 async def register(
     body: UserCreate,
-    pool: asyncpg.Pool = Depends(get_pool),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     existing = await get_user_by_email(pool, body.email)
     if existing:
@@ -86,12 +80,10 @@ async def register(
 
 @router.get("/me")
 async def get_me(
-    request: Request,
     current_engineer: dict = Depends(get_current_engineer),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     try:
-        pool = request.app.state.db_pool
-
         log.info(
             "get_me_debug",
             engineer_id=current_engineer.get("engineer_id"),

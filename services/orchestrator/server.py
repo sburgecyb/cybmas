@@ -49,7 +49,17 @@ from services.orchestrator.intent_classifier import (  # noqa: E402
     JIRA_ID_PATTERN,
     IntentType,
     classify_intent,
+    normalize_message_for_jira_key_scan,
 )
+
+_JIRA_ENV_KEYS = ("JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_USER_EMAIL")
+
+
+def _jira_env_missing_keys() -> list[str]:
+    """Keys required for live JIRA REST calls (Cloud Run has no .env.local)."""
+    return [k for k in _JIRA_ENV_KEYS if not (os.getenv(k) or "").strip()]
+
+
 from services.shared.models import AgentRequest, ChatMode  # noqa: E402
 
 log = structlog.get_logger()
@@ -129,7 +139,18 @@ async def lifespan(app: FastAPI):
     _get_l1l2_runner()
     _get_l3_runner()
 
-    log.info("orchestrator.started", mode="adk")
+    missing_jira = _jira_env_missing_keys()
+    log.info(
+        "orchestrator.started",
+        mode="adk",
+        jira_live_configured=len(missing_jira) == 0,
+    )
+    if missing_jira:
+        log.warning(
+            "orchestrator.jira_env_missing_at_startup",
+            missing=missing_jira,
+            hint="Set on cybmas-orchestrator — see deploy/README.md § JIRA live API",
+        )
     yield
 
     from services.l1l2_agent.main import close_db_pool as close_l1l2
@@ -433,7 +454,73 @@ async def _process_stream(request: AgentRequest) -> AsyncGenerator[str, None]:
         yield _sse({"type": "done", "session_id": session_id})
         return
 
-    # ── Step 1: fast intent classification (no LLM, ~0 ms) ───────────────────
+    # ── Step 1: issue-key fast path — runs *before* intent classification so Redis /
+    # classifier quirks cannot send "KAN-4" to ADK (search_tickets → "not in KB").
+    # Order: 1) Postgres tickets table  2) live JIRA API only on DB miss (no extra hop).
+    scan_msg = normalize_message_for_jira_key_scan(request.message)
+    match = JIRA_ID_PATTERN.search(scan_msg)
+    if match:
+        jira_id = match.group(0).upper()
+        log.info(
+            "orchestrator.jira_fast_path",
+            jira_id=jira_id,
+            engineer_id=request.engineer_id,
+        )
+        text = await _lookup_ticket_in_db(jira_id)
+
+        if not text:  # DB miss only — then live JIRA (avoids unnecessary Atlassian calls)
+            missing_jira = _jira_env_missing_keys()
+            if missing_jira:
+                log.warning("orchestrator.jira_env_missing", jira_id=jira_id)
+                text = (
+                    f"⚠️ Live JIRA is not configured on this server (missing: "
+                    f"{', '.join(missing_jira)}). "
+                    "Add **JIRA_BASE_URL**, **JIRA_API_TOKEN**, and **JIRA_USER_EMAIL** "
+                    "to the **cybmas-orchestrator** Cloud Run service (Secret Manager or "
+                    "`--set-env-vars`). Local dev uses `.env.local`; production does not. "
+                    "See **deploy/README.md** → *JIRA live API*."
+                )
+            jira_tool_error: str | None = None
+            if not text:
+                try:
+                    from services.l1l2_agent.tools.jira_fetch import fetch_jira_ticket
+
+                    r = await fetch_jira_ticket(jira_id)
+                    if r.get("success") and r.get("data"):
+                        text = _format_ticket_detail(r["data"])
+                    elif not r.get("success"):
+                        jira_tool_error = str(
+                            r.get("error") or "JIRA request failed"
+                        )
+                except Exception as exc:
+                    log.warning(
+                        "orchestrator.jira_api_unavailable",
+                        jira_id=jira_id,
+                        error=str(exc),
+                    )
+                    jira_tool_error = str(exc)
+
+            if not text and jira_tool_error:
+                text = (
+                    f"⚠️ Could not load **{jira_id}** from JIRA: {jira_tool_error}\n\n"
+                    "Check Cloud Run **cybmas-orchestrator** env: **JIRA_BASE_URL**, "
+                    "**JIRA_API_TOKEN**, **JIRA_USER_EMAIL** (see deploy README)."
+                )
+
+        final_text = text or (
+            f"[Orchestrator] Ticket **{jira_id}** was not in the synced database and "
+            "the live JIRA API returned no usable data. "
+            "Verify JIRA credentials on this Cloud Run service and that the issue exists."
+        )
+        yield _sse({"type": "token", "content": final_text})
+        asyncio.ensure_future(
+            _save_session(session_id, request.engineer_id,
+                          request.message, final_text, prior_messages)
+        )
+        yield _sse({"type": "done", "session_id": session_id})
+        return
+
+    # ── Step 2: fast intent classification (no LLM, ~0 ms) ─────────────────────
     try:
         intent = await classify_intent(
             message=request.message,
@@ -448,43 +535,8 @@ async def _process_stream(request: AgentRequest) -> AsyncGenerator[str, None]:
     log.info("orchestrator.intent", intent=intent.value,
              engineer_id=request.engineer_id)
 
-    # ── Step 2: JIRA direct lookup — instant, no ADK needed ───────────────────
     if intent in (IntentType.JIRA_LOOKUP, IntentType.STATUS_CHECK):
-        match = JIRA_ID_PATTERN.search(request.message)
-        if match:
-            jira_id = match.group()
-            text = await _lookup_ticket_in_db(jira_id)
-
-            if not text:  # not in DB — try live JIRA API
-                try:
-                    if intent == IntentType.STATUS_CHECK:
-                        from services.l1l2_agent.tools.jira_fetch import check_ticket_status
-                        r = await check_ticket_status(jira_id)
-                        if r.get("success") and r.get("data"):
-                            d = r["data"]
-                            text = (
-                                f"**{d.get('jira_id')}** is currently **{d.get('status')}**\n"
-                                f"Assigned to: {d.get('assignee', 'Unassigned')}\n"
-                                f"Last updated: {d.get('last_updated', 'Unknown')}"
-                            )
-                    else:
-                        from services.l1l2_agent.tools.jira_fetch import fetch_jira_ticket
-                        r = await fetch_jira_ticket(jira_id)
-                        if r.get("success") and r.get("data"):
-                            text = _format_ticket_detail(r["data"])
-                except Exception as exc:
-                    log.warning("orchestrator.jira_api_unavailable",
-                                jira_id=jira_id, error=str(exc))
-
-            final_text = text or f"Ticket **{jira_id}** not found in the knowledge base."
-            yield _sse({"type": "token", "content": final_text})
-            asyncio.ensure_future(
-                _save_session(session_id, request.engineer_id,
-                              request.message, final_text, prior_messages)
-            )
-            yield _sse({"type": "done", "session_id": session_id})
-            return
-        intent = IntentType.TICKET_SEARCH  # no ID found, fall to search
+        intent = IntentType.TICKET_SEARCH  # classifier expected a key; scan found none
 
     # ── Step 3: out of scope ───────────────────────────────────────────────────
     if intent == IntentType.OUT_OF_SCOPE:
@@ -538,7 +590,16 @@ async def _process_stream(request: AgentRequest) -> AsyncGenerator[str, None]:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "service": "orchestrator", "mode": "adk"}
+    missing = _jira_env_missing_keys()
+    return {
+        "status": "ok",
+        "service": "orchestrator",
+        "mode": "adk",
+        "jira_live": {
+            "configured": len(missing) == 0,
+            "missing_env": missing,
+        },
+    }
 
 
 @app.post("/process")

@@ -1,6 +1,7 @@
 # --- Secrets & credentials ---
 .env
 .env.local
+app_db_password.txt
 .env.*.local
 "env old"
 .env\ old

@@ -1,6 +1,8 @@
 """Per-engineer rate limiter: 60 requests per minute enforced via Redis."""
+import asyncio
 import os
 import time
+from contextlib import suppress
 
 import structlog
 from fastapi import HTTPException, Request, status
@@ -24,7 +26,14 @@ async def check_rate_limit(request: Request) -> None:
     if not engineer_id:
         return
 
+    ready = getattr(request.app.state, "backends_ready", None)
+    if ready is not None and not ready.is_set():
+        with suppress(Exception):
+            await asyncio.wait_for(ready.wait(), timeout=60.0)
+
     redis = request.app.state.redis
+    if redis is None:
+        return
     bucket = int(time.time() // _WINDOW)
     key = f"ratelimit:{engineer_id}:{bucket}"
 

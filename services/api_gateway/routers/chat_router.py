@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from services.api_gateway.deps import get_db_pool  # noqa: E402
 from services.api_gateway.middleware.auth_middleware import get_current_engineer  # noqa: E402
 from services.shared.models import (
     AgentRequest,
@@ -23,14 +24,8 @@ log = structlog.get_logger()
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-ORCHESTRATOR_ENDPOINT = os.getenv("ORCHESTRATOR_ENDPOINT", "http://localhost:8001")
-
-
-# ── Shared dependency ──────────────────────────────────────────────────────────
-
-
-async def get_pool(request: Request) -> asyncpg.Pool:
-    return request.app.state.db_pool
+# Base URL only (no path). Trailing slash would yield "//process" and often 404.
+ORCHESTRATOR_ENDPOINT = os.getenv("ORCHESTRATOR_ENDPOINT", "http://localhost:8001").rstrip("/")
 
 
 # ── SSE helpers ────────────────────────────────────────────────────────────────
@@ -135,7 +130,7 @@ async def chat(
 async def get_messages(
     session_id: str,
     caller: dict = Depends(get_current_engineer),
-    pool: asyncpg.Pool = Depends(get_pool),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     """Return the full message history for a session owned by the caller."""
     try:

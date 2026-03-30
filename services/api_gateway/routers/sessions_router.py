@@ -6,21 +6,15 @@ import uuid
 
 import asyncpg
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from services.api_gateway.deps import get_db_pool  # noqa: E402
 from services.api_gateway.middleware.auth_middleware import get_current_engineer  # noqa: E402
 
 log = structlog.get_logger()
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
-
-
-# ── Shared dependency ──────────────────────────────────────────────────────────
-
-
-async def get_pool(request: Request) -> asyncpg.Pool:
-    return request.app.state.db_pool
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -29,7 +23,7 @@ async def get_pool(request: Request) -> asyncpg.Pool:
 @router.get("")
 async def list_sessions(
     caller: dict = Depends(get_current_engineer),
-    pool: asyncpg.Pool = Depends(get_pool),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     """Return the 20 most recent sessions for the authenticated engineer."""
     rows = await pool.fetch(
@@ -66,7 +60,7 @@ async def list_sessions(
 async def delete_session(
     session_id: str,
     caller: dict = Depends(get_current_engineer),
-    pool: asyncpg.Pool = Depends(get_pool),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Delete a session — the caller must own it."""
     try:

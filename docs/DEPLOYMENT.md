@@ -84,7 +84,7 @@ One Cloud Run Job:
 
 | Pipeline File | Trigger | Environment | Purpose |
 |---|---|---|---|
-| `cloudbuild.yaml` | `gcloud builds submit` or Cloud Build trigger | Any | Build & push **api-gateway** + **orchestrator** to Artifact Registry (`deploy/README.md`) |
+| `cloudbuild.yaml` | `gcloud builds submit` or Cloud Build trigger | Any | Build & push **api-gateway** + **orchestrator** + **frontend** to Artifact Registry (`deploy/README.md`; set **`_NEXT_PUBLIC_API_URL`** to the gateway URL for prod UI) |
 | `cloudbuild.dev.yaml` | Push to `develop` | Dev | Fast deploy *(add when needed)* |
 | `cloudbuild.infra.yaml` | Manual only | Any | Terraform apply *(add when needed)* |
 | `cloudbuild.pipeline.yaml` | Cloud Scheduler / manual | Production | JIRA full sync *(add when needed)* |

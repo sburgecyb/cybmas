@@ -7,6 +7,7 @@ import asyncio
 import os
 from datetime import datetime
 from types import TracebackType
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -15,6 +16,12 @@ from dotenv import load_dotenv
 load_dotenv(".env.local")
 
 log = structlog.get_logger()
+
+
+def _env_clean(value: str) -> str:
+    """Strip whitespace and BOM — Secret Manager values often end with \\n."""
+    return (value or "").strip().strip("\ufeff")
+
 
 # Fields requested on every issue fetch — keeps payloads small
 _ISSUE_FIELDS = (
@@ -52,9 +59,17 @@ class JIRAClient:
     """
 
     def __init__(self) -> None:
-        base_url: str = os.environ["JIRA_BASE_URL"].rstrip("/")
-        api_token: str = os.environ["JIRA_API_TOKEN"]
-        user_email: str = os.environ["JIRA_USER_EMAIL"]
+        required = ("JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_USER_EMAIL")
+        missing = [k for k in required if not _env_clean(os.getenv(k, ""))]
+        if missing:
+            raise JIRAClientError(
+                "Missing environment variables: "
+                + ", ".join(missing)
+                + " (set on Cloud Run orchestrator — deploy/README.md § JIRA live API)",
+            )
+        base_url: str = _env_clean(os.environ["JIRA_BASE_URL"]).rstrip("/")
+        api_token: str = _env_clean(os.environ["JIRA_API_TOKEN"])
+        user_email: str = _env_clean(os.environ["JIRA_USER_EMAIL"])
 
         self._client = httpx.AsyncClient(
             base_url=base_url,
@@ -66,6 +81,23 @@ class JIRAClient:
             timeout=30.0,
         )
         self._log = log.bind(service="jira_client")
+
+        parsed = urlparse(base_url)
+        self._log.info(
+            "jira_client.initialized",
+            api_host=parsed.netloc or "?",
+            scheme=parsed.scheme or "?",
+            email_domain=user_email.split("@", 1)[-1] if "@" in user_email else "?",
+        )
+
+        # Cloud expects https://yourcompany.atlassian.net — not .../jira or a board URL.
+        low = base_url.lower()
+        if "atlassian.net" in low and ("/jira" in low or low.endswith("jira")):
+            self._log.warning(
+                "jira_client.base_url_suspicious",
+                base_url=base_url,
+                hint="Use site root only, e.g. https://yourcompany.atlassian.net",
+            )
 
     # ── Context manager support ────────────────────────────────────────────────
 
@@ -122,10 +154,22 @@ class JIRAClient:
             JIRAClientError: if the issue is not found (404) or the request fails.
         """
         self._log.info("jira_client.get_ticket", jira_id=jira_id)
-        return await self._get(
-            f"/rest/api/3/issue/{jira_id}",
-            params={"fields": _ISSUE_FIELDS},
-        )
+        path = f"/rest/api/3/issue/{jira_id}"
+        try:
+            return await self._get(path, params={"fields": _ISSUE_FIELDS})
+        except JIRAClientError as exc:
+            if exc.status_code != 404:
+                raise
+            site = str(self._client.base_url).rstrip("/")
+            raise JIRAClientError(
+                f"Issue {jira_id!r} not found at {site}. "
+                "Verify: (1) JIRA_BASE_URL is exactly the site root you use in the browser "
+                "(e.g. https://yourcompany.atlassian.net with no /jira path); "
+                "(2) the issue key exists on that site; "
+                "(3) the Atlassian account for JIRA_USER_EMAIL can open this issue — "
+                "JIRA Cloud often returns 404 (not 403) when the user cannot browse the issue.",
+                status_code=404,
+            ) from exc
 
     async def search_tickets(
         self,

@@ -1,11 +1,12 @@
-# Cloud Build: build and push API gateway + orchestrator.
+# Cloud Build: build and push API gateway + orchestrator + Next.js frontend.
 # Prereq: Artifact Registry repo (default name: cybmas) in ${_REGION}.
 #
-# Bash / Cloud Shell:
-#   gcloud builds submit --config=cloudbuild.yaml --substitutions=_TAG=dev-1 .
+# Frontend inlines NEXT_PUBLIC_API_URL at build time. Set it to your Cloud Run
+# API gateway URL (https://cybmas-api-....run.app), e.g. after first gateway deploy:
 #
-# Windows PowerShell (quote the whole substitutions value — commas break parsing):
-#   gcloud builds submit --config=cloudbuild.yaml --substitutions="_TAG=dev-1" .
+#   gcloud builds submit --config=cloudbuild.yaml --substitutions="_NEXT_PUBLIC_API_URL=https://YOUR-API.run.app,_TAG=latest" .
+#
+# Windows PowerShell (quote the whole substitutions string — commas break parsing).
 #
 # Defaults below: us-central1, cybmas, latest — omit --substitutions to use them.
 
@@ -13,6 +14,7 @@ substitutions:
   _REGION: us-central1
   _REPO: cybmas
   _TAG: latest
+  _NEXT_PUBLIC_API_URL: http://localhost:8000
 
 steps:
   - id: build-api-gateway
@@ -47,9 +49,28 @@ steps:
       - push
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/orchestrator:${_TAG}
 
+  - id: build-frontend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - frontend/Dockerfile
+      - --build-arg
+      - NEXT_PUBLIC_API_URL=${_NEXT_PUBLIC_API_URL}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_TAG}
+      - frontend/
+
+  - id: push-frontend
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_TAG}
+
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/api-gateway:${_TAG}
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/orchestrator:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_TAG}
 
 options:
   logging: CLOUD_LOGGING_ONLY

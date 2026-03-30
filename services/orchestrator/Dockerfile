@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY services /app/services
 COPY pipeline /app/pipeline
 
-EXPOSE 8001
+# Cloud Run sets PORT (usually 8080). For local: docker run -e PORT=8001 -p 8001:8001 ...
+EXPOSE 8080
 
-CMD ["uvicorn", "services.orchestrator.server:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD exec uvicorn services.orchestrator.server:app --host 0.0.0.0 --port "${PORT:-8080}"

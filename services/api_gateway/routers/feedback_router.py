@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 
 import asyncpg
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from services.api_gateway.deps import get_db_pool  # noqa: E402
 from services.api_gateway.middleware.auth_middleware import get_current_engineer  # noqa: E402
 from services.shared.models import FeedbackInput  # noqa: E402
 
@@ -19,13 +20,6 @@ router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 _VALID_RATINGS = frozenset({"correct", "can_be_better", "incorrect"})
 
 
-# ── Shared dependency ──────────────────────────────────────────────────────────
-
-
-async def get_pool(request: Request) -> asyncpg.Pool:
-    return request.app.state.db_pool
-
-
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
@@ -33,7 +27,7 @@ async def get_pool(request: Request) -> asyncpg.Pool:
 async def save_feedback(
     body: FeedbackInput,
     caller: dict = Depends(get_current_engineer),
-    pool: asyncpg.Pool = Depends(get_pool),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     """Persist a rating for a specific message in a session.
 
@@ -81,7 +75,7 @@ async def save_feedback(
 async def feedback_summary(
     days: int = Query(default=7, ge=1, le=90),
     caller: dict = Depends(get_current_engineer),
-    pool: asyncpg.Pool = Depends(get_pool),
+    pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     """Return aggregate feedback statistics for the past N days.
 

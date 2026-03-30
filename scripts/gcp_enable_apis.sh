@@ -11,7 +11,9 @@ for api in \
   secretmanager.googleapis.com \
   aiplatform.googleapis.com \
   sqladmin.googleapis.com \
-  redis.googleapis.com
+  redis.googleapis.com \
+  vpcaccess.googleapis.com \
+  compute.googleapis.com
 do
   echo "  - $api"
   gcloud services enable "$api" --project="$PROJECT_ID"

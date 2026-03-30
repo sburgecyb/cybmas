@@ -35,7 +35,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_token(email: str, role: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS)
-    payload: dict = {"sub": email, "role": role, "exp": expire}
+    # python-jose requires JSON-serializable claims; exp must be a Unix timestamp (seconds).
+    payload: dict = {"sub": email, "role": role, "exp": int(expire.timestamp())}
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
