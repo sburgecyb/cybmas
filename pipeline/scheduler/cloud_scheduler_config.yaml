@@ -1,27 +1,9 @@
-# Cloud Scheduler jobs for the cybmas pipeline
-jobs:
-  - name: embedding-worker-full-sync
-    description: Full JIRA → pgvector sync (weekly, Sunday 02:00 UTC)
-    schedule: "0 2 * * 0"
-    timeZone: UTC
-    httpTarget:
-      uri: ${EMBEDDING_WORKER_JOB_URL}
-      httpMethod: POST
-      body: '{"sync_mode": "full"}'
-      headers:
-        Content-Type: application/json
-      oidcToken:
-        serviceAccountEmail: ${EMBEDDING_WORKER_SA}
-
-  - name: embedding-worker-delta-sync
-    description: Delta JIRA → pgvector sync (every 15 minutes)
-    schedule: "*/15 * * * *"
-    timeZone: UTC
-    httpTarget:
-      uri: ${EMBEDDING_WORKER_JOB_URL}
-      httpMethod: POST
-      body: '{"sync_mode": "delta"}'
-      headers:
-        Content-Type: application/json
-      oidcToken:
-        serviceAccountEmail: ${EMBEDDING_WORKER_SA}
+# Reference only — Cloud Scheduler targets the Cloud Run Jobs REST API (:run), not an app URL.
+# Use scripts/setup_embedding_scheduler.sh or setup_embedding_scheduler.ps1 (see deploy/README.md Phase 7).
+#
+# Example URI pattern:
+#   https://REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/PROJECT_ID/locations/REGION/jobs/JOB_NAME:run
+#
+# Override SYNC_MODE per execution, e.g. full sync:
+#   gcloud run jobs execute JOB_NAME --region=REGION --update-env-vars=SYNC_MODE=full --wait
+jobs: []

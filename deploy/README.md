@@ -1,5 +1,7 @@
 # GCP deployment — step by step
 
+**Consolidated GCP setup + build + deploy (single doc):** [`docs/GCP_SETUP_AND_DEPLOY.md`](../docs/GCP_SETUP_AND_DEPLOY.md).
+
 Work through **phases in order**. You do **not** need Docker on your laptop; use **Cloud Build** (see Phase 0).
 
 | Phase | What you do | Outcome |
@@ -13,6 +15,7 @@ Work through **phases in order**. You do **not** need Docker on your laptop; use
 | **5** | Cloud Run: API gateway | `ORCHESTRATOR_ENDPOINT` → phase 4 URL |
 | **5b** | Cloud SQL: migrations + seeds | Schema + users (+ optional demo vectors) in **prod** DB |
 | **6** | Cloud Run: **frontend** | Next.js UI; rebuild image with real **`_NEXT_PUBLIC_API_URL`** after API URL exists |
+| **7** | GitHub vars + CI (or manual `gcloud run jobs deploy`) + optional Scheduler | **JIRA → pgvector** via Cloud Run Job **`cybmas-embedding-worker`** |
 
 More detail: `docs/DEPLOYMENT.md`, `docs/SECRETS.md`.
 
@@ -87,7 +90,7 @@ gcloud artifacts repositories add-iam-policy-binding cybmas \
 
 From the **repository root** (clone or copy of this repo).
 
-Builds three images: **`api-gateway`**, **`orchestrator`**, **`frontend`**. The Next.js app bakes **`NEXT_PUBLIC_API_URL`** at build time (default `http://localhost:8000`). For a **production** frontend, set **`_NEXT_PUBLIC_API_URL`** to the **HTTPS URL of `cybmas-api`** (you get that URL after Phase 5). If you have not deployed the API yet, you can run Phase 3 once for backends only by using the default (frontend image will point at localhost until you **re-run** this phase with the real gateway URL).
+Builds four backend-related images: **`api-gateway`**, **`orchestrator`**, **`embedding-worker`**, **`frontend`**. The Next.js app bakes **`NEXT_PUBLIC_API_URL`** at build time (default `http://localhost:8000`). For a **production** frontend, set **`_NEXT_PUBLIC_API_URL`** to the **HTTPS URL of `cybmas-api`** (you get that URL after Phase 5). If you have not deployed the API yet, you can run Phase 3 once for backends only by using the default (frontend image will point at localhost until you **re-run** this phase with the real gateway URL).
 
 **Easiest (defaults: `us-central1`, repo `cybmas`, tag `latest`):**
 
@@ -108,7 +111,7 @@ gcloud builds submit --config=cloudbuild.yaml \
   --substitutions=_NEXT_PUBLIC_API_URL=https://cybmas-api-xxxxx-uc.a.run.app,_TAG=latest .
 ```
 
-**Stop here and confirm:** [Artifact Registry](https://console.cloud.google.com/artifacts) → `cybmas` → you see **`api-gateway`**, **`orchestrator`**, and **`frontend`** (tag `latest` or `dev-1`).
+**Stop here and confirm:** [Artifact Registry](https://console.cloud.google.com/artifacts) → `cybmas` → you see **`api-gateway`**, **`orchestrator`**, **`embedding-worker`**, and **`frontend`** (tag `latest` or `dev-1`).
 
 ---
 
@@ -361,6 +364,65 @@ Add **`--add-cloudsql-instances=...`** on the gateway if it uses the Cloud SQL s
 
 ---
 
+## Phase 7 — JIRA → embeddings (Cloud Run Job)
+
+The **embedding worker** (`pipeline/embedding_worker/`) pulls issues from JIRA, calls **Vertex AI** `text-embedding-004`, and **upserts** rows into **Cloud SQL / pgvector**. CI builds image **`embedding-worker`** (see root `cloudbuild.yaml`) and the workflow **`.github/workflows/gcp-deploy.yml`** deploys or updates Cloud Run Job **`cybmas-embedding-worker`** on each push to `main` / `master`.
+
+### Prereqs (same as orchestrator + DB)
+
+- **Secret Manager** secrets already used by **`cybmas-orchestrator`**: `database_url`, `redis_url`, `jira_api_token`, `jira_user_email` (see Phase 4 / `docs/SECRETS.md`).
+- **Cloud SQL**: `database_url` should use the **Unix socket** form for Cloud Run. The job must be deployed with **`--add-cloudsql-instances=PROJECT_ID:REGION:INSTANCE_ID`** — set GitHub variable **`GCP_CLOUDSQL_CONNECTION`** to that value (same string as on **`cybmas-orchestrator`** / **`cybmas-api`**).
+- **Memorystore Redis**: set GitHub variable **`EMBEDDING_JOB_VPC_CONNECTOR`** to your Serverless VPC Access connector (e.g. **`cybmas-redis-conn`**, Phase 3b). Without it, the job cannot reach a **private** Redis host.
+- **Runtime service account** (recommended): set **`GCP_RUN_JOB_SERVICE_ACCOUNT`** to the **same** service account email you use on **`cybmas-orchestrator`** (must have **Secret Manager Accessor** on the secrets above, **Cloud SQL Client**, **Vertex AI User**).
+
+### GitHub Actions variables (repository or `GCP_CICD` environment)
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| **`JIRA_BASE_URL`** | Yes | e.g. `https://yourorg.atlassian.net` (no trailing slash) |
+| **`JIRA_PROJECT_KEYS`** | No | Comma-separated JIRA **project keys** to limit sync. If unset **and** BU project lists are empty, the worker syncs **all issues** the JIRA user can access (no `project in (...)` filter). |
+| **`BU_B1_PROJECTS`**, **`BU_B2_PROJECTS`** | No | Optional map: project key → BU code **B1** / **B2** for `business_units` tagging. |
+| **`DEFAULT_BUSINESS_UNIT`** | No | When **`BU_B1_PROJECTS` / `BU_B2_PROJECTS`** list any projects, every other synced project gets this BU if set, otherwise **`B1`**. With **no** BU lists, only this env (if set) tags rows; else **NULL**. Values must exist in **`business_units`**. |
+| **`GCP_CLOUDSQL_CONNECTION`** | Strongly recommended | `PROJECT_ID:REGION:INSTANCE_ID` for **`--add-cloudsql-instances`** |
+| **`EMBEDDING_JOB_VPC_CONNECTOR`** | If Redis is private | e.g. `cybmas-redis-conn` |
+| **`GCP_RUN_JOB_SERVICE_ACCOUNT`** | Strongly recommended | Orchestrator SA (or dedicated job SA with same roles) |
+| **`INCIDENT_ISSUE_TYPES`** | No | Overrides default `Incident,Production Issue` |
+| **`CLOUD_RUN_JOB_EMBEDDING_DEV`** | No | Override job name (default `cybmas-embedding-worker`) |
+
+After the next successful workflow run, confirm:
+
+```bash
+gcloud run jobs describe cybmas-embedding-worker --region=us-central1 --project=YOUR_PROJECT_ID
+```
+
+### Manual run (delta or one-off full sync)
+
+```bash
+# Delta (default template env SYNC_MODE=delta)
+gcloud run jobs execute cybmas-embedding-worker --region=us-central1 --project=YOUR_PROJECT_ID --wait
+
+# Full re-sync (overrides env for this execution only)
+gcloud run jobs execute cybmas-embedding-worker --region=us-central1 --project=YOUR_PROJECT_ID \
+  --update-env-vars=SYNC_MODE=full --wait
+```
+
+Logs: **Cloud Run → Jobs → Executions → Logs**.
+
+### Optional — Cloud Scheduler (every 15 minutes)
+
+Create a **service account** used only to **invoke** the job (e.g. `cybmas-scheduler@PROJECT.iam.gserviceaccount.com`), grant it **`roles/run.invoker`** on the job, enable **Cloud Scheduler API**, then run from repo root (bash):
+
+```bash
+export PROJECT_ID=YOUR_PROJECT_ID
+export CALLER_SA=cybmas-scheduler@${PROJECT_ID}.iam.gserviceaccount.com
+chmod +x scripts/setup_embedding_scheduler.sh
+./scripts/setup_embedding_scheduler.sh
+```
+
+Or see **`scripts/setup_embedding_scheduler.ps1`** on Windows. Adjust **`SCHEDULE`** (default `*/15 * * * *`) inside the script if needed.
+
+---
+
 ## Optional — Local Docker smoke test
 
 If you **do** have Docker, you can build from repo root:
@@ -377,14 +439,16 @@ Skip if policy forbids Docker.
 
 ## CI/CD — GitHub Actions → Cloud Build → Cloud Run (**Dev**)
 
+**Full standalone runbook (new GCP project / new repo, plus troubleshooting):** [`docs/CICD_PIPELINE_SETUP.md`](../docs/CICD_PIPELINE_SETUP.md).
+
 The workflow **`.github/workflows/gcp-deploy.yml`** is **Dev-only** for now:
 
-- **Push to `main`** — Cloud Build (root `cloudbuild.yaml`) then deploy images to Dev Cloud Run.
+- **Push to `main`** — Cloud Build (root `cloudbuild.yaml`) then deploy images to Dev Cloud Run **services** and the **`cybmas-embedding-worker`** **job**.
 - **Actions → Run workflow** — same steps without a new commit (manual redeploy).
 
-Deploy steps only update the **container image** (`gcloud run deploy … --image=…`). VPC connector, secrets, service accounts, and env vars stay as you already set on each service (Phases 4–6).
+Deploy steps update **service** container images (`gcloud run deploy … --image=…`) and the **embedding worker job** definition (`gcloud run jobs deploy …`). VPC connector, Cloud SQL attachment, runtime service account, and **non-image** env on services stay as you last set them in the console/CLI (Phases 4–6); the job’s env/secrets are **re-applied each run** from the workflow (see Phase 7 variables).
 
-**Prereq:** Dev Cloud Run services **`cybmas-api`**, **`cybmas-orchestrator`**, **`cybmas-frontend`** must exist once (first deploy via CLI as in this doc). CI then rolls new revisions only.
+**Prereq:** Dev Cloud Run services **`cybmas-api`**, **`cybmas-orchestrator`**, **`cybmas-frontend`** must exist once (first deploy via CLI as in this doc). The **embedding job** can be created entirely by CI once **`JIRA_BASE_URL`** and networking variables are set.
 
 ### 1. GitHub — Secrets and variables
 
@@ -404,6 +468,15 @@ Deploy steps only update the **container image** (`gcloud run deploy … --image
 | `GCP_REGION` | No | Defaults to `us-central1` in the workflow |
 | `ARTIFACT_REGISTRY_REPO` | No | Defaults to `cybmas` |
 | `CLOUD_RUN_SERVICE_*_DEV` | No | Only if your Dev service names differ from `cybmas-api`, `cybmas-orchestrator`, `cybmas-frontend` |
+| `JIRA_BASE_URL` | Yes (for embedding job step) | Same base URL as orchestrator (Atlassian) |
+| `JIRA_PROJECT_KEYS` | No | Limit sync to these JIRA project keys; omit for site-wide (all visible issues) |
+| `BU_B1_PROJECTS`, `BU_B2_PROJECTS` | No | Optional BU tagging map |
+| `DEFAULT_BUSINESS_UNIT` | No | With BU lists set: fallback for unlisted projects, else **B1**. With no BU lists: optional tag for all rows (else NULL). |
+| `GCP_CLOUDSQL_CONNECTION` | Strongly recommended | `PROJECT:REGION:INSTANCE` for the embedding job |
+| `EMBEDDING_JOB_VPC_CONNECTOR` | If Redis is private | e.g. `cybmas-redis-conn` |
+| `GCP_RUN_JOB_SERVICE_ACCOUNT` | Strongly recommended | Same SA as `cybmas-orchestrator` (or equivalent IAM) |
+| `INCIDENT_ISSUE_TYPES` | No | Optional override for incident JIRA types |
+| `CLOUD_RUN_JOB_EMBEDDING_DEV` | No | Override default job name `cybmas-embedding-worker` |
 
 **Secrets “not found” in Actions though they exist in Settings**
 
@@ -487,7 +560,7 @@ gcloud iam service-accounts add-iam-policy-binding $GHA_SA `
   --member=$member
 
 # Project-level roles (Cloud Build submit, source upload, Cloud Run deploy)
-foreach ($ROLE in @("roles/cloudbuild.builds.editor", "roles/storage.objectAdmin", "roles/run.developer")) {
+foreach ($ROLE in @("roles/cloudbuild.builds.editor", "roles/storage.objectAdmin", "roles/run.developer", "roles/serviceusage.serviceUsageConsumer", "roles/artifactregistry.reader")) {
   gcloud projects add-iam-policy-binding $PROJECT_ID `
     --member="serviceAccount:$GHA_SA" `
     --role=$ROLE
@@ -498,9 +571,9 @@ foreach ($ROLE in @("roles/cloudbuild.builds.editor", "roles/storage.objectAdmin
 # Do NOT concatenate two addresses (wrong: name@project.iam...@${PROJECT_ID}.iam... — that causes INVALID_ARGUMENT).
 # If all three services use the same SA, list that single email once and run one binding, or use an array of one element.
 $runtimeSas = @(
-  "cybmas-api@cybmas.iam.gserviceaccount.com",
-  "cybmas-orchestrator@cybmas.iam.gserviceaccount.com",
-  "566370119486-compute@developer.gserviceaccount.com"
+  "YOUR_GATEWAY_SA@${PROJECT_ID}.iam.gserviceaccount.com",
+  "YOUR_ORCHESTRATOR_SA@${PROJECT_ID}.iam.gserviceaccount.com",
+  "YOUR_FRONTEND_SA@${PROJECT_ID}.iam.gserviceaccount.com"
 )
 foreach ($RUNTIME_SA in $runtimeSas) {
   gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA `
@@ -528,7 +601,7 @@ Grant **`$GHA_SA`** on the **Dev** project (bash — same shell as the bash WIF 
 
 ```bash
 # Project-level roles (Cloud Build submit, source upload bucket, Cloud Run deploy)
-for ROLE in roles/cloudbuild.builds.editor roles/storage.objectAdmin roles/run.developer; do
+for ROLE in roles/cloudbuild.builds.editor roles/storage.objectAdmin roles/run.developer roles/serviceusage.serviceUsageConsumer roles/artifactregistry.reader; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${GHA_SA}" \
     --role="$ROLE"
@@ -556,6 +629,48 @@ done
 If all three services share **one** compute service account, a single `add-iam-policy-binding` on that account is enough.
 
 Ensure the **Cloud Build default service account** can push to Artifact Registry (Phase 2).
+
+**`gcloud builds submit` forbidden on bucket `[PROJECT_ID_cloudbuild]`** (e.g. `cybmas_cloudbuild`) **or `serviceusage.services.use`**
+
+`gcloud builds submit` uploads source to **`gs://PROJECT_ID_cloudbuild`** as the **GitHub Actions** service account. That call also uses **Service Usage** on the project (`X-Goog-User-Project`). Apply **all** of the following on the **dev project** for `github-actions-cybmas@PROJECT_ID.iam.gserviceaccount.com`:
+
+1. **`roles/serviceusage.serviceUsageConsumer`** (includes `serviceusage.services.use`).
+2. **`roles/cloudbuild.builds.editor`** (start builds).
+3. **`roles/storage.objectAdmin`** at **project** level (from the role loop) **may not be enough** — Cloud Build often needs **bucket metadata** (`storage.buckets.get` / list). If the error persists after (1)–(2), grant **project-level** **`roles/storage.admin`** to that SA (broader; typical fix for this exact error):
+
+```powershell
+$PROJECT_ID = "cybmas"
+$GHA_SA = "github-actions-cybmas@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud projects add-iam-policy-binding $PROJECT_ID `
+  --member="serviceAccount:$GHA_SA" `
+  --role="roles/storage.admin"
+```
+
+4. **Bucket-level** binding (optional if you prefer not to use project `storage.admin`):
+
+```powershell
+gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}_cloudbuild" `
+  --member="serviceAccount:$GHA_SA" `
+  --role="roles/storage.objectAdmin"
+```
+
+If it **still** fails, an **organization policy** (e.g. domain-restricted sharing, resource locations) is likely blocking — only an **org admin** can allow the SA or bucket. As a longer-term alternative, use a **Cloud Build trigger** connected to GitHub so Cloud Build clones source inside GCP (no GitHub SA upload to `_cloudbuild`).
+
+Verify the bucket exists: `gcloud storage buckets describe "gs://${PROJECT_ID}_cloudbuild" --project=$PROJECT_ID`
+
+**`PERMISSION_DENIED: artifactregistry.repositories.downloadArtifacts`** on `gcloud run deploy`
+
+`gcloud run deploy --image=...docker.pkg.dev/...` runs as the **GitHub Actions** service account; it must be able to **read** images from Artifact Registry. Grant **`roles/artifactregistry.reader`** on the dev project (or on the `cybmas` repository only):
+
+```powershell
+$PROJECT_ID = "cybmas"
+$GHA_SA = "github-actions-cybmas@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud projects add-iam-policy-binding $PROJECT_ID `
+  --member="serviceAccount:$GHA_SA" `
+  --role="roles/artifactregistry.reader"
+```
+
+The **Cloud Run runtime** service account (on each service) also needs pull access to deploy new revisions; if the runtime SA differs from the GitHub SA, ensure that runtime SA has **`roles/artifactregistry.reader`** too (often already granted in Phase 2).
 
 ### 3. Artifact Registry (Dev)
 

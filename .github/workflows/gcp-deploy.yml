@@ -1,4 +1,5 @@
-# Dev only: Cloud Build → Artifact Registry → Cloud Run (cybmas-api, cybmas-orchestrator, cybmas-frontend).
+# Dev only: Cloud Build → Artifact Registry → Cloud Run (api, orchestrator, frontend) +
+# Cloud Run Job (cybmas-embedding-worker — JIRA → pgvector).
 #
 # - Push to `main` or `master`: build and deploy to Dev.
 # - workflow_dispatch: same pipeline (e.g. redeploy without a new commit).
@@ -97,3 +98,75 @@ jobs:
           deploy_one "$SVC_API" api-gateway
           deploy_one "$SVC_ORCH" orchestrator
           deploy_one "$SVC_FE" frontend
+
+      - name: Deploy Cloud Run Job (JIRA embedding worker)
+        env:
+          JOB_NAME: ${{ vars.CLOUD_RUN_JOB_EMBEDDING_DEV != '' && vars.CLOUD_RUN_JOB_EMBEDDING_DEV || 'cybmas-embedding-worker' }}
+          BU_B1_PROJECTS: ${{ vars.BU_B1_PROJECTS }}
+          BU_B2_PROJECTS: ${{ vars.BU_B2_PROJECTS }}
+          JIRA_PROJECT_KEYS: ${{ vars.JIRA_PROJECT_KEYS }}
+          DEFAULT_BUSINESS_UNIT: ${{ vars.DEFAULT_BUSINESS_UNIT }}
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          GCP_CLOUDSQL_CONNECTION: ${{ vars.GCP_CLOUDSQL_CONNECTION }}
+          EMBEDDING_JOB_VPC_CONNECTOR: ${{ vars.EMBEDDING_JOB_VPC_CONNECTOR }}
+          GCP_RUN_JOB_SERVICE_ACCOUNT: ${{ vars.GCP_RUN_JOB_SERVICE_ACCOUNT }}
+          INCIDENT_ISSUE_TYPES: ${{ vars.INCIDENT_ISSUE_TYPES }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          PROJ="${{ vars.GCP_PROJECT_DEV }}"
+          REG="${{ env.REGION }}"
+          REPO="${{ env.AR_REPO }}"
+          IMAGE="${REG}-docker.pkg.dev/${PROJ}/${REPO}/embedding-worker:${TAG}"
+
+          if [ -z "${JIRA_BASE_URL:-}" ]; then
+            echo "::error::Set GitHub variable JIRA_BASE_URL (e.g. https://yourorg.atlassian.net) so the embedding worker can call JIRA."
+            exit 1
+          fi
+
+          cat > /tmp/embedding-worker-env.yaml <<EOF
+          GCP_PROJECT_ID: "${PROJ}"
+          VERTEX_AI_LOCATION: "${REG}"
+          SYNC_MODE: "delta"
+          GOOGLE_GENAI_USE_VERTEXAI: "true"
+          JIRA_BASE_URL: "${JIRA_BASE_URL}"
+          JIRA_PROJECT_KEYS: "${JIRA_PROJECT_KEYS:-}"
+          DEFAULT_BUSINESS_UNIT: "${DEFAULT_BUSINESS_UNIT:-}"
+          BU_B1_PROJECTS: "${BU_B1_PROJECTS:-}"
+          BU_B2_PROJECTS: "${BU_B2_PROJECTS:-}"
+          EOF
+
+          if [ -n "${INCIDENT_ISSUE_TYPES:-}" ]; then
+            printf 'INCIDENT_ISSUE_TYPES: "%s"\n' "${INCIDENT_ISSUE_TYPES}" >> /tmp/embedding-worker-env.yaml
+          fi
+
+          DEPLOY_ARGS=(
+            gcloud run jobs deploy "${JOB_NAME}"
+            --project="${PROJ}"
+            --region="${REG}"
+            --image="${IMAGE}"
+            --tasks=1
+            --max-retries=2
+            --task-timeout=3600s
+            --env-vars-file=/tmp/embedding-worker-env.yaml
+            --set-secrets="DATABASE_URL=database_url:latest,REDIS_URL=redis_url:latest,JIRA_API_TOKEN=jira_api_token:latest,JIRA_USER_EMAIL=jira_user_email:latest"
+            --quiet
+          )
+
+          if [ -n "${GCP_RUN_JOB_SERVICE_ACCOUNT:-}" ]; then
+            DEPLOY_ARGS+=(--service-account="${GCP_RUN_JOB_SERVICE_ACCOUNT}")
+          fi
+
+          if [ -n "${GCP_CLOUDSQL_CONNECTION:-}" ]; then
+            DEPLOY_ARGS+=(--add-cloudsql-instances="${GCP_CLOUDSQL_CONNECTION}")
+          else
+            echo "::warning::GCP_CLOUDSQL_CONNECTION is unset. If DATABASE_URL uses the Cloud SQL Unix socket, add repository variable GCP_CLOUDSQL_CONNECTION (PROJECT_ID:REGION:INSTANCE_ID)."
+          fi
+
+          if [ -n "${EMBEDDING_JOB_VPC_CONNECTOR:-}" ]; then
+            DEPLOY_ARGS+=(--vpc-connector="${EMBEDDING_JOB_VPC_CONNECTOR}" --vpc-egress=private-ranges-only)
+          else
+            echo "::warning::EMBEDDING_JOB_VPC_CONNECTOR is unset. If REDIS_URL points to Memorystore, set it to your Serverless VPC Access connector (e.g. cybmas-redis-conn)."
+          fi
+
+          "${DEPLOY_ARGS[@]}"

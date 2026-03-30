@@ -1,4 +1,5 @@
-# Cloud Build: build and push API gateway + orchestrator + Next.js frontend.
+# Cloud Build: build and push API gateway + orchestrator + Next.js frontend +
+# JIRA → pgvector embedding worker (Cloud Run Job image).
 # Prereq: Artifact Registry repo (default name: cybmas) in ${_REGION}.
 #
 # Frontend inlines NEXT_PUBLIC_API_URL at build time. Set it to your Cloud Run
@@ -49,6 +50,22 @@ steps:
       - push
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/orchestrator:${_TAG}
 
+  - id: build-embedding-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - pipeline/embedding_worker/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/embedding-worker:${_TAG}
+      - pipeline/embedding_worker
+
+  - id: push-embedding-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/embedding-worker:${_TAG}
+
   - id: build-frontend
     name: gcr.io/cloud-builders/docker
     args:
@@ -70,6 +87,7 @@ steps:
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/api-gateway:${_TAG}
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/orchestrator:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/embedding-worker:${_TAG}
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:${_TAG}
 
 options:

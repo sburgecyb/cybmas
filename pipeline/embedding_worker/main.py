@@ -7,7 +7,8 @@ Modes:
 
 Environment variables (loaded from .env.local for local runs):
   SYNC_MODE, DATABASE_URL, REDIS_URL,
-  BU_B1_PROJECTS, BU_B2_PROJECTS, INCIDENT_ISSUE_TYPES
+  JIRA_PROJECT_KEYS (optional), BU_B1_PROJECTS, BU_B2_PROJECTS (optional BU map),
+  DEFAULT_BUSINESS_UNIT (optional), INCIDENT_ISSUE_TYPES
 """
 import asyncio
 import os
@@ -77,6 +78,47 @@ def _get_bu_project_map() -> dict[str, str]:
     return mapping
 
 
+def _parse_project_key_list(raw: str) -> list[str]:
+    """Split a comma-separated list of JIRA project keys."""
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _get_sync_project_keys(bu_project_map: dict[str, str]) -> list[str]:
+    """Project keys to scope JQL.
+
+    Order of precedence:
+      1. ``JIRA_PROJECT_KEYS`` env (comma-separated), if non-empty.
+      2. Else all keys appearing in ``BU_B1_PROJECTS`` / ``BU_B2_PROJECTS``.
+      3. Else empty list → JIRA queries are **not** scoped by project (all issues
+         the API user can access).
+
+    Returns:
+        Sorted list of unique project keys, or ``[]`` for site-wide scope.
+    """
+    explicit = _parse_project_key_list(os.getenv("JIRA_PROJECT_KEYS", ""))
+    if explicit:
+        return sorted(set(explicit))
+    from_bu = sorted(set(bu_project_map.keys()))
+    return from_bu
+
+
+def _resolve_business_unit(project_key: str, bu_project_map: dict[str, str]) -> str | None:
+    """BU code for DB row.
+
+    If the project appears in ``BU_B1_PROJECTS`` / ``BU_B2_PROJECTS``, use that BU.
+    If a BU map is configured (either list non-empty) but the project is not listed,
+    use ``DEFAULT_BUSINESS_UNIT`` when set, otherwise ``B1`` as the default BU.
+    If no BU map is configured, use ``DEFAULT_BUSINESS_UNIT`` when set, else NULL.
+    """
+    mapped = bu_project_map.get(project_key)
+    if mapped:
+        return mapped
+    default = (os.getenv("DEFAULT_BUSINESS_UNIT") or "").strip()
+    if bu_project_map:
+        return default or "B1"
+    return default or None
+
+
 def _get_incident_issue_types() -> list[str]:
     """Parse INCIDENT_ISSUE_TYPES env var into a list of type strings."""
     raw = os.getenv("INCIDENT_ISSUE_TYPES", "Incident,Production Issue")
@@ -115,7 +157,7 @@ async def _set_last_sync_time(redis_client: redis.Redis, dt: datetime) -> None:
 async def _process_ticket(
     pool: asyncpg.Pool,
     raw_issue: dict,
-    bu_code: str,
+    bu_code: str | None,
 ) -> None:
     ticket = normalize_ticket(raw_issue, bu_code)
     text = prepare_ticket_text(ticket)
@@ -126,7 +168,7 @@ async def _process_ticket(
 async def _process_incident(
     pool: asyncpg.Pool,
     raw_issue: dict,
-    bu_code: str,
+    bu_code: str | None,
 ) -> None:
     incident = normalize_incident(raw_issue, bu_code)
     text = prepare_incident_text(incident)
@@ -144,9 +186,14 @@ async def main() -> None:
 
     bu_project_map = _get_bu_project_map()
     incident_types = _get_incident_issue_types()
-    all_project_keys = list(bu_project_map.keys())
+    all_project_keys = _get_sync_project_keys(bu_project_map)
 
-    log.info("sync.started", mode=sync_mode, projects=all_project_keys)
+    log.info(
+        "sync.started",
+        mode=sync_mode,
+        project_scope="all_accessible" if not all_project_keys else "listed",
+        project_keys=all_project_keys,
+    )
     start_ts = time.monotonic()
     total_processed = 0
     errors = 0
@@ -160,11 +207,10 @@ async def main() -> None:
 
     async with JIRAClient() as jira:
         if sync_mode == "full":
-            projects_jql = _jql_in_list(all_project_keys)
             incident_types_jql = _jql_in_list(incident_types)
+            projects_jql = _jql_in_list(all_project_keys) if all_project_keys else ""
 
             # ── Tickets ────────────────────────────────────────────────────────
-            ticket_jql = f"project in {projects_jql} ORDER BY created ASC"
             raw_tickets = await jira.get_updated_since(
                 since=datetime(2000, 1, 1, tzinfo=timezone.utc),
                 project_keys=all_project_keys,
@@ -175,7 +221,7 @@ async def main() -> None:
                 project_key: str = (
                     (raw.get("fields") or {}).get("project", {}).get("key", "")
                 )
-                bu_code = bu_project_map.get(project_key, "")
+                bu_code = _resolve_business_unit(project_key, bu_project_map)
                 try:
                     await _process_ticket(pool, raw, bu_code)
                     total_processed += 1
@@ -188,11 +234,16 @@ async def main() -> None:
                     )
 
             # ── Incidents ──────────────────────────────────────────────────────
-            incident_jql = (
-                f"project in {projects_jql} "
-                f"AND issuetype in {incident_types_jql} "
-                f"ORDER BY created ASC"
-            )
+            if all_project_keys:
+                incident_jql = (
+                    f"project in {projects_jql} "
+                    f"AND issuetype in {incident_types_jql} "
+                    f"ORDER BY created ASC"
+                )
+            else:
+                incident_jql = (
+                    f"issuetype in {incident_types_jql} ORDER BY created ASC"
+                )
             raw_incidents = await jira.search_tickets(incident_jql, max_results=100)
             incident_issues: list[dict] = raw_incidents.get("issues", [])
             log.info("sync.incidents_fetched", count=len(incident_issues))
@@ -201,7 +252,7 @@ async def main() -> None:
                 project_key = (
                     (raw.get("fields") or {}).get("project", {}).get("key", "")
                 )
-                bu_code = bu_project_map.get(project_key, "")
+                bu_code = _resolve_business_unit(project_key, bu_project_map)
                 try:
                     await _process_incident(pool, raw, bu_code)
                     total_processed += 1
@@ -229,7 +280,7 @@ async def main() -> None:
             for raw in raw_tickets:
                 fields: dict = raw.get("fields") or {}
                 project_key = (fields.get("project") or {}).get("key", "")
-                bu_code = bu_project_map.get(project_key, "")
+                bu_code = _resolve_business_unit(project_key, bu_project_map)
                 issue_type: str = (fields.get("issuetype") or {}).get("name", "")
                 is_incident = issue_type.lower() in incident_types_set
 

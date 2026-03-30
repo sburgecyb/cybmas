@@ -214,17 +214,22 @@ class JIRAClient:
 
         Args:
             since: Only return issues updated at or after this datetime (UTC).
-            project_keys: List of JIRA project keys to scope the query.
+            project_keys: JIRA project keys to scope the query. If empty, every
+                project the authenticated user can browse is included (no
+                ``project in (...)`` clause).
 
         Returns:
             Flat list of all matching JIRA issue dicts.
         """
-        keys_jql = ", ".join(project_keys)
         since_str = since.strftime("%Y-%m-%d %H:%M")
-        jql = (
-            f'project in ({keys_jql}) AND updated >= "{since_str}" '
-            f"ORDER BY updated ASC"
-        )
+        if project_keys:
+            keys_jql = ", ".join(project_keys)
+            jql = (
+                f'project in ({keys_jql}) AND updated >= "{since_str}" '
+                f"ORDER BY updated ASC"
+            )
+        else:
+            jql = f'updated >= "{since_str}" ORDER BY updated ASC'
 
         all_issues: list[dict] = []
         start_at = 0
