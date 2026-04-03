@@ -1,8 +1,11 @@
 """ADK tools: fetch full JIRA ticket details and check ticket status.
 
-Both tools check a Redis cache before hitting the JIRA REST API:
-  - fetch_jira_ticket: 5-minute TTL, full issue payload
-  - check_ticket_status: 2-minute TTL, status/assignee only
+``fetch_jira_ticket``: Redis → Postgres ``tickets`` (KB / seed) → live JIRA.
+
+``check_ticket_status``: Redis → **live JIRA only** (never the local DB — status
+must reflect JIRA, which may differ from the synced snapshot).
+
+TTL: fetch_jira_ticket 5 min; check_ticket_status 2 min.
 """
 import json
 import os
@@ -40,6 +43,76 @@ async def _cache_set(redis_client: redis.Redis, key: str, value: dict, ttl: int)
     await redis_client.setex(key, ttl, json.dumps(value, default=str))
 
 
+def _iso(dt: object | None) -> str | None:
+    if dt is None:
+        return None
+    if hasattr(dt, "isoformat"):
+        return dt.isoformat()  # type: ignore[no-any-return]
+    return str(dt)
+
+
+async def _try_load_ticket_from_db(jira_id: str) -> dict | None:
+    """Return fetch_jira_ticket-shaped dict from ``tickets``, or None if not found."""
+    try:
+        from services.l1l2_agent.main import get_db_pool  # type: ignore[import]
+
+        pool = await get_db_pool()
+        row = await pool.fetchrow(
+            """SELECT jira_id, summary, description, status, resolution,
+                      discussion, ticket_type, created_at, updated_at
+               FROM tickets WHERE jira_id = $1""",
+            jira_id,
+        )
+        if not row:
+            row = await pool.fetchrow(
+                """SELECT jira_id, summary, description, status, resolution,
+                          discussion, ticket_type, created_at, updated_at
+                   FROM tickets WHERE UPPER(jira_id) = UPPER($1)""",
+                jira_id,
+            )
+        if not row:
+            return None
+
+        discussion = row["discussion"] or []
+        if isinstance(discussion, str):
+            try:
+                discussion = json.loads(discussion)
+            except json.JSONDecodeError:
+                discussion = []
+
+        comments: list[dict] = []
+        for c in (discussion or [])[-5:]:
+            if isinstance(c, dict):
+                comments.append(
+                    {
+                        "author": str(c.get("author") or "Unknown"),
+                        "body": str(c.get("body") or "")[:2000],
+                        "created": c.get("created"),
+                    }
+                )
+
+        canonical = row["jira_id"]
+        desc = row["description"] or ""
+        return {
+            "jira_id": canonical,
+            "summary": row["summary"],
+            "status": row["status"],
+            "assignee": None,
+            "reporter": None,
+            "priority": row["ticket_type"],
+            "issue_type": row["ticket_type"],
+            "created": _iso(row["created_at"]),
+            "updated": _iso(row["updated_at"]),
+            "description": desc[:2000] if desc else None,
+            "resolution": row["resolution"] or None,
+            "comments": comments,
+            "_source": "database",
+        }
+    except Exception as exc:
+        log.warning("jira_fetch.db_lookup_failed", jira_id=jira_id, error=str(exc))
+        return None
+
+
 # ── Tools ──────────────────────────────────────────────────────────────────────
 
 
@@ -55,6 +128,8 @@ async def fetch_jira_ticket(jira_id: str) -> dict:
     Returns:
         Dictionary with ticket details including summary, status,
         description, resolution and up to 5 recent comments.
+        Data may come from the local ``tickets`` table (field ``_source``: ``database``)
+        when the issue is not available from live JIRA.
     """
     redis_client = redis.from_url(_REDIS_URL)
     cache_key = f"jira:ticket:{jira_id}"
@@ -64,6 +139,12 @@ async def fetch_jira_ticket(jira_id: str) -> dict:
         if cached is not None:
             log.info("jira_fetch.cache_hit", jira_id=jira_id)
             return ToolResult(success=True, data=cached).model_dump()
+
+        db_data = await _try_load_ticket_from_db(jira_id)
+        if db_data is not None:
+            await _cache_set(redis_client, cache_key, db_data, _TICKET_CACHE_TTL)
+            log.info("jira_fetch.success_db", jira_id=jira_id)
+            return ToolResult(success=True, data=db_data).model_dump()
 
         async with JIRAClient() as client:
             issue = await client.get_ticket(jira_id)
@@ -102,6 +183,7 @@ async def fetch_jira_ticket(jira_id: str) -> dict:
                 "comments": comments,
             }
 
+        result["_source"] = "jira"
         await _cache_set(redis_client, cache_key, result, _TICKET_CACHE_TTL)
         log.info("jira_fetch.success", jira_id=jira_id)
         return ToolResult(success=True, data=result).model_dump()
@@ -119,10 +201,12 @@ async def fetch_jira_ticket(jira_id: str) -> dict:
 
 
 async def check_ticket_status(jira_id: str) -> dict:
-    """Check the current status of a JIRA ticket.
+    """Check the current status of a JIRA ticket from **live JIRA** (not Postgres).
 
     Use this tool when an engineer asks about the status of a specific ticket.
     Lighter than fetch_jira_ticket — only returns status, assignee and last update.
+    The local ``tickets`` table is not used here because workflow status can change
+    in JIRA after the last sync.
 
     Args:
         jira_id: The JIRA ticket ID e.g. 'B1-1234'.
@@ -151,6 +235,7 @@ async def check_ticket_status(jira_id: str) -> dict:
                 ),
                 "last_updated": fields.get("updated"),
                 "priority": (fields.get("priority") or {}).get("name"),
+                "_source": "jira",
             }
 
         await _cache_set(redis_client, cache_key, result, _STATUS_CACHE_TTL)

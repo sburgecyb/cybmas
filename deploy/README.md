@@ -380,15 +380,17 @@ Then create or update the Cloud Run Job **`cybmas-embedding-worker`** with `gclo
 - **Cloud SQL**: `database_url` should use the **Unix socket** form for Cloud Run. Deploy the job with **`--add-cloudsql-instances=PROJECT_ID:REGION:INSTANCE_ID`** (same connection name as **`cybmas-orchestrator`** / **`cybmas-api`**).
 - **Memorystore Redis**: add **`--vpc-connector=...`** and **`--vpc-egress=private-ranges-only`** using the same connector as the orchestrator (Phase 3b, e.g. **`cybmas-redis-conn`**). Without it, the job cannot reach a **private** Redis host.
 - **Runtime service account** (recommended): use the **same** service account as **`cybmas-orchestrator`** (**`--service-account=...`**) with **Secret Manager**, **Cloud SQL Client**, **Vertex AI User**.
+- **Database**: ensure **`Default`** exists in **`business_units`** (migration **`004_default_business_unit.sql`** or `database/seeds/business_units.sql`). Run **`python scripts/run_migrations.py`** against Cloud SQL if you have not applied **`004`** yet.
 
 ### Job env vars (for `gcloud run jobs deploy` or an env-vars YAML file)
 
 | Env var | Required | Purpose |
 |---------|----------|---------|
 | **`JIRA_BASE_URL`** | Yes | e.g. `https://yourorg.atlassian.net` (no trailing slash) |
-| **`JIRA_PROJECT_KEYS`** | No | Comma-separated JIRA **project keys** to limit sync. If unset **and** BU project lists are empty, the worker syncs **all issues** the JIRA user can access. |
-| **`BU_B1_PROJECTS`**, **`BU_B2_PROJECTS`** | No | Optional map: project key → **B1** / **B2** for `business_units` tagging. |
-| **`DEFAULT_BUSINESS_UNIT`** | No | When BU lists list any projects, unmapped projects use this BU or **`B1`**. With no BU lists: optional tag for all rows (else **NULL**). Must exist in **`business_units`** if set. |
+| **`JIRA_PROJECT_KEYS`** | No | If set, sync only these project keys. If **unset or empty**, sync **all projects** the JIRA user can access (no `project in` filter). |
+| **`BU_B1_PROJECTS`**, **`BU_B2_PROJECTS`** | No | Map **project key** → **B1** / **B2** for **`business_unit`** only; does **not** restrict which projects are synced. |
+| **`JIRA_BUSINESS_UNIT_FIELD_ID`** | No | e.g. **`customfield_10100`** — JIRA field value used as **`business_unit`** when non-empty (requested automatically in search). Must match **`business_units.code`**. |
+| **`DEFAULT_BUSINESS_UNIT`** | No | Used when JIRA field is empty **and** project is not in the BU map. If unset, code **`Default`** is used. |
 | **`INCIDENT_ISSUE_TYPES`** | No | Overrides default `Incident,Production Issue` |
 
 On **`gcloud run jobs deploy`**, also pass **`--add-cloudsql-instances=PROJECT:REGION:INSTANCE`**, **`--vpc-connector`** / **`--vpc-egress`** (if Redis is private), **`--service-account`**, and **`--set-secrets`** (same pattern as **`cybmas-orchestrator`**). Job name defaults to **`cybmas-embedding-worker`**.
@@ -398,6 +400,48 @@ After the image exists in Artifact Registry and you have deployed the job once, 
 ```bash
 gcloud run jobs describe cybmas-embedding-worker --region=us-central1 --project=YOUR_PROJECT_ID
 ```
+
+### Run the worker locally (debug JIRA → DB)
+
+**`.env.local`** at the **repository root** must include the same vars as Cloud Run: **`DATABASE_URL`**, **`REDIS_URL`**, **`JIRA_BASE_URL`**, **`JIRA_API_TOKEN`**, **`JIRA_USER_EMAIL`**, **`GCP_PROJECT_ID`**, Vertex auth (**`GOOGLE_APPLICATION_CREDENTIALS`** or **`gcloud auth application-default login`**), optional **`BU_*`** / **`SYNC_MODE`**.
+
+**Python version:** **`asyncpg`** usually has no wheel on very new Python (e.g. 3.14). Use **3.11 or 3.12** for the worker venv:
+
+```powershell
+cd F:\cybmas
+py -3.12 -m venv .venv-embedding
+.\.venv-embedding\Scripts\pip install -r pipeline\embedding_worker\requirements.txt
+```
+
+**Option A — helper script** (picks `.venv-embedding` or `.venv` if present):
+
+```powershell
+cd F:\cybmas
+.\scripts\run_embedding_sync_local.ps1              # SYNC_MODE=delta
+.\scripts\run_embedding_sync_local.ps1 -SyncMode full
+.\scripts\run_embedding_sync_local.ps1 -Python C:\path\to\python3.12.exe
+```
+
+**Option B — manual:**
+
+```powershell
+cd F:\cybmas
+$env:SYNC_MODE = "full"   # first-time: pull all matching issues; delta uses Redis watermark
+.\.venv-embedding\Scripts\python pipeline\embedding_worker\main.py
+```
+
+`main.py` loads **`<repo>/.env.local`** automatically; the worker directory is on `sys.path` for imports.
+
+Watch the console for:
+
+- **`sync.issue_begin`** — JIRA issue picked up (`jira_id`, `kind` ticket/incident, `business_unit`, `summary_preview`).
+- **`sync.issue_synced`** — normalize + embed + upsert finished without exception.
+- **`sync.issue_failed`** — exception with `error`, `error_type`, and traceback (`exc_info`).
+- **`upsert.ticket_upserted`** / **`upsert.incident_upserted`** — row written (from `upsert.py`).
+- **`sync.db_counts`** — `tickets_table_rows` / `incidents_table_rows` after the run.
+- **`sync.completed`** — `total_processed` vs `errors`.
+
+For **JSON** logs (closer to Cloud Logging), set **`LOG_FORMAT=json`** before running.
 
 ### Manual run (delta or one-off full sync)
 

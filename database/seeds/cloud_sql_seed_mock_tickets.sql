@@ -6,7 +6,8 @@
 
 INSERT INTO business_units (code, name) VALUES
     ('B1', 'Reservations Platform'),
-    ('B2', 'Payments Platform')
+    ('B2', 'Payments Platform'),
+    ('Default', 'Unmapped / default')
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO tickets (

@@ -68,12 +68,12 @@ def _extract_comments(raw_comments: list[dict]) -> list[dict]:
 # ── Normalisation ──────────────────────────────────────────────────────────────
 
 
-def normalize_ticket(raw: dict, business_unit: str | None) -> dict:
+def normalize_ticket(raw: dict, business_unit: str) -> dict:
     """Flatten a raw JIRA API issue into the pipeline's internal ticket format.
 
     Args:
         raw: Full JIRA issue dict as returned by the API (with ``fields`` key).
-        business_unit: BU code (FK to ``business_units``), or ``None``.
+        business_unit: BU code (FK to ``business_units``), e.g. ``Default``.
 
     Returns:
         Flat dict compatible with ``prepare_ticket_text`` and ``upsert_ticket``.
@@ -96,12 +96,12 @@ def normalize_ticket(raw: dict, business_unit: str | None) -> dict:
     }
 
 
-def normalize_incident(raw: dict, business_unit: str | None) -> dict:
+def normalize_incident(raw: dict, business_unit: str) -> dict:
     """Flatten a raw JIRA incident issue into the pipeline's internal incident format.
 
     Args:
         raw: Full JIRA issue dict as returned by the API (with ``fields`` key).
-        business_unit: BU code (FK to ``business_units``), or ``None``.
+        business_unit: BU code (FK to ``business_units``), e.g. ``Default``.
 
     Returns:
         Flat dict compatible with ``prepare_incident_text`` and ``upsert_incident``.

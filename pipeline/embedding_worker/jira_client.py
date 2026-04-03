@@ -3,9 +3,9 @@
 Uses httpx.AsyncClient with Basic auth (email + API token).
 All methods raise JIRAClientError on non-2xx responses.
 """
-import asyncio
 import os
 from datetime import datetime
+from pathlib import Path
 from types import TracebackType
 from urllib.parse import urlparse
 
@@ -13,6 +13,8 @@ import httpx
 import structlog
 from dotenv import load_dotenv
 
+_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_ROOT / ".env.local")
 load_dotenv(".env.local")
 
 log = structlog.get_logger()
@@ -28,6 +30,15 @@ _ISSUE_FIELDS = (
     "summary,description,status,resolution,"
     "comment,issuetype,priority,created,updated,labels,project"
 )
+
+
+def _issue_field_names() -> list[str]:
+    """Field ids for /rest/api/3/search/jql ``fields`` array."""
+    names = [f.strip() for f in _ISSUE_FIELDS.replace("\n", "").split(",") if f.strip()]
+    extra = (os.getenv("JIRA_BUSINESS_UNIT_FIELD_ID") or "").strip()
+    if extra and extra not in names:
+        names.append(extra)
+    return names
 
 
 # ── Exception ──────────────────────────────────────────────────────────────────
@@ -139,6 +150,24 @@ class JIRAClient:
 
         return response.json()  # type: ignore[return-value]
 
+    async def _post_json(self, path: str, body: dict) -> dict:
+        """Execute a POST with JSON body and return the parsed JSON body."""
+        try:
+            response = await self._client.post(path, json=body)
+        except httpx.RequestError as exc:
+            raise JIRAClientError(f"Network error calling {path}: {exc}") from exc
+
+        if response.status_code == 404:
+            raise JIRAClientError(f"Not found: {path}", status_code=404)
+
+        if response.is_error:
+            raise JIRAClientError(
+                f"JIRA API error on {path}: {response.text}",
+                status_code=response.status_code,
+            )
+
+        return response.json()  # type: ignore[return-value]
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def get_ticket(self, jira_id: str) -> dict:
@@ -177,15 +206,18 @@ class JIRAClient:
         start_at: int = 0,
         max_results: int = 100,
     ) -> dict:
-        """Search JIRA issues using a JQL query.
+        """Search JIRA issues using JQL (paginates until all results are read).
+
+        Uses ``POST /rest/api/3/search/jql`` — the legacy ``GET /rest/api/3/search``
+        endpoint returns HTTP 410 on Jira Cloud.
 
         Args:
             jql: JQL query string.
-            start_at: 0-based offset for pagination.
-            max_results: Page size (max 100 per JIRA API limits).
+            start_at: Ignored (legacy offset pagination; new API uses page tokens).
+            max_results: Page size per request (capped at 100).
 
         Returns:
-            Dict with keys ``issues`` (list), ``total`` (int), ``startAt`` (int).
+            Dict with keys ``issues`` (list), ``total`` (int), ``startAt`` (always 0).
         """
         self._log.info(
             "jira_client.search_tickets",
@@ -193,15 +225,34 @@ class JIRAClient:
             start_at=start_at,
             max_results=max_results,
         )
-        return await self._get(
-            "/rest/api/3/search",
-            params={
+        page_size = min(max(1, max_results), 100)
+        all_issues: list[dict] = []
+        next_token: str | None = None
+
+        while True:
+            payload: dict = {
                 "jql": jql,
-                "startAt": start_at,
-                "maxResults": max_results,
-                "fields": _ISSUE_FIELDS,
-            },
-        )
+                "maxResults": page_size,
+                "fields": _issue_field_names(),
+            }
+            if next_token:
+                payload["nextPageToken"] = next_token
+
+            data = await self._post_json("/rest/api/3/search/jql", payload)
+            batch: list[dict] = data.get("issues") or []
+            all_issues.extend(batch)
+
+            if data.get("isLast") or not batch:
+                break
+            next_token = data.get("nextPageToken")
+            if not next_token:
+                break
+
+        return {
+            "issues": all_issues,
+            "total": len(all_issues),
+            "startAt": 0,
+        }
 
     async def get_updated_since(
         self,
@@ -231,28 +282,13 @@ class JIRAClient:
         else:
             jql = f'updated >= "{since_str}" ORDER BY updated ASC'
 
-        all_issues: list[dict] = []
-        start_at = 0
-        page_size = 100
-
-        while True:
-            page = await self.search_tickets(jql, start_at=start_at, max_results=page_size)
-            issues: list[dict] = page.get("issues", [])
-            all_issues.extend(issues)
-
-            total: int = page.get("total", 0)
-            self._log.info(
-                "jira_client.paginate",
-                fetched=len(all_issues),
-                total=total,
-                start_at=start_at,
-            )
-
-            if len(all_issues) >= total or not issues:
-                break
-
-            start_at += len(issues)
-
+        page = await self.search_tickets(jql, max_results=100)
+        all_issues: list[dict] = page.get("issues", [])
+        self._log.info(
+            "jira_client.paginate",
+            fetched=len(all_issues),
+            total=page.get("total", 0),
+        )
         return all_issues
 
     async def get_issue_comments(self, jira_id: str) -> list[dict]:
