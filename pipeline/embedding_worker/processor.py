@@ -3,7 +3,8 @@
 Provides two responsibilities:
   1. normalize_* — flatten raw JIRA API issue dicts into the schema used by
      the rest of the pipeline (upsert, embedder).
-  2. prepare_*_text — build the plain-text string that gets embedded.
+  2. prepare_*_text — build the plain-text string that gets embedded
+     (tickets, incidents, knowledge base articles).
 """
 
 # ── ADF helper (local; avoids importing JIRAClient) ───────────────────────────
@@ -197,5 +198,56 @@ def prepare_incident_text(incident: dict) -> str:
     long_term_fix: str = incident.get("long_term_fix", "") or ""
     if long_term_fix.strip():
         parts.append(f"Long-term Fix: {long_term_fix}")
+
+    return "\n\n".join(parts)[:_MAX_OUTPUT_CHARS]
+
+
+def prepare_kb_text(article: dict) -> str:
+    """Build the embedding input string for a knowledge base article.
+
+    Args:
+        article: Normalised KB dict (keys align with JSON ingest / DB row).
+
+    Returns:
+        Plain text string, truncated to match ticket embedding budget.
+    """
+    parts: list[str] = [
+        f"Title: {article.get('title', '')}",
+        f"Category: {article.get('category', '')} | Level: {article.get('level', '')}",
+    ]
+
+    tags = article.get("tags")
+    if isinstance(tags, list) and tags:
+        parts.append(f"Tags: {', '.join(str(t) for t in tags)}")
+
+    ps = (article.get("problem_statement") or "").strip()
+    if ps:
+        parts.append(f"Problem: {ps[:1200]}")
+
+    symptoms = article.get("symptoms") or []
+    if isinstance(symptoms, list) and symptoms:
+        parts.append("Symptoms:\n" + "\n".join(f"- {s}" for s in symptoms[:20]))
+
+    causes = article.get("possible_causes") or []
+    if isinstance(causes, list) and causes:
+        cause_lines: list[str] = []
+        for c in causes[:15]:
+            if isinstance(c, dict):
+                cause_lines.append(f"- {c.get('cause', '')}")
+            else:
+                cause_lines.append(f"- {c}")
+        parts.append("Possible causes:\n" + "\n".join(cause_lines))
+
+    diag = article.get("diagnostic_steps") or []
+    if isinstance(diag, list) and diag:
+        parts.append("Diagnostic steps:\n" + "\n".join(f"- {s}" for s in diag[:25]))
+
+    res = article.get("resolution_steps") or []
+    if isinstance(res, list) and res:
+        parts.append("Resolution steps:\n" + "\n".join(f"- {s}" for s in res[:25]))
+
+    val = article.get("validation") or []
+    if isinstance(val, list) and val:
+        parts.append("Validation:\n" + "\n".join(f"- {s}" for s in val[:15]))
 
     return "\n\n".join(parts)[:_MAX_OUTPUT_CHARS]

@@ -187,8 +187,16 @@ def _coerce_mapping(obj: object) -> dict:
         return {}
 
 
+# Tools whose successful payload is a list of SearchResult dicts for the UI.
+_SEARCH_TOOLS_FOR_SSE = frozenset({
+    "search_tickets",
+    "search_incidents",
+    "search_knowledge_base",
+})
+
+
 def _extract_search_tool_payload(fn_resp) -> list | None:
-    """Return result rows from search_tickets / search_incidents, or None."""
+    """Return result rows from search_* tools, or None."""
     raw = _coerce_mapping(getattr(fn_resp, "response", None))
     if raw.get("success") is False:
         return None
@@ -344,7 +352,6 @@ async def _run_adk_agent(
 
     partial_chunks: list[str] = []
     final_answer: str | None = None
-    sources_sent = False
     error_suffix = ""
 
     try:
@@ -354,38 +361,51 @@ async def _run_adk_agent(
             new_message=Content(role="user", parts=[Part(text=message)]),
             run_config=RunConfig(streaming_mode=StreamingMode.SSE),
         ):
+            # Per-iteration dedup: the same tool response may appear both on parts
+            # and via get_function_responses; different tools in the same turn may
+            # both emit sources (frontend merges SSE "sources" events).
+            emitted_search_tools: set[str] = set()
+
             # ── Intercept tool responses to send sources immediately ───────────
-            # ADK emits an event with function_response parts when a tool result
-            # is about to be fed back to the LLM. We extract search results here
-            # so the browser's sources panel populates before the answer arrives.
-            if not sources_sent and event.content and event.content.parts:
+            if event.content and event.content.parts:
                 for part in event.content.parts:
                     fn_resp = getattr(part, "function_response", None)
-                    if fn_resp and fn_resp.name in ("search_tickets", "search_incidents"):
-                        results = _extract_search_tool_payload(fn_resp)
-                        if results:
-                            yield _sse({"type": "sources", "sources": results})
-                            sources_sent = True
-                            log.info("adk.sources_sent", count=len(results),
-                                     tool=fn_resp.name)
+                    if (
+                        not fn_resp
+                        or fn_resp.name not in _SEARCH_TOOLS_FOR_SSE
+                        or fn_resp.name in emitted_search_tools
+                    ):
+                        continue
+                    results = _extract_search_tool_payload(fn_resp)
+                    if results:
+                        emitted_search_tools.add(fn_resp.name)
+                        yield _sse({"type": "sources", "sources": results})
+                        log.info(
+                            "adk.sources_sent",
+                            count=len(results),
+                            tool=fn_resp.name,
+                        )
 
-            # Alternate shape: some ADK events expose responses only via helper.
-            if not sources_sent:
-                get_fn = getattr(event, "get_function_responses", None)
-                if callable(get_fn):
-                    for fn_resp in get_fn():
-                        if fn_resp.name in ("search_tickets", "search_incidents"):
-                            results = _extract_search_tool_payload(fn_resp)
-                            if results:
-                                yield _sse({"type": "sources", "sources": results})
-                                sources_sent = True
-                                log.info(
-                                    "adk.sources_sent",
-                                    count=len(results),
-                                    tool=fn_resp.name,
-                                    via="get_function_responses",
-                                )
-                                break
+            get_fn = getattr(event, "get_function_responses", None)
+            if callable(get_fn):
+                # Emit every search tool in this batch — do not break after the first.
+                # Otherwise parallel search_knowledge_base + search_tickets drops one side.
+                for fn_resp in get_fn():
+                    if (
+                        fn_resp.name not in _SEARCH_TOOLS_FOR_SSE
+                        or fn_resp.name in emitted_search_tools
+                    ):
+                        continue
+                    results = _extract_search_tool_payload(fn_resp)
+                    if results:
+                        emitted_search_tools.add(fn_resp.name)
+                        yield _sse({"type": "sources", "sources": results})
+                        log.info(
+                            "adk.sources_sent",
+                            count=len(results),
+                            tool=fn_resp.name,
+                            via="get_function_responses",
+                        )
 
             # ── Stream model text (SSE: partial chunks; final = full snapshot) ─
             if not event.content or not event.content.parts:

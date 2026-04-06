@@ -140,7 +140,7 @@ _B1_TICKETS: list[dict] = [
     },
     {
       "jira_id": "B2-4011",
-      "business_unit": "B1",
+      "business_unit": "B2",
       "ticket_type": "Story",
       "summary": "Search results inconsistent across regions",
       "description": "Production issue affecting users with supporting logs and monitoring anomalies.",

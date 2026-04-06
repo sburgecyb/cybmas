@@ -36,8 +36,14 @@ def _format_results(search_results: list[dict]) -> str:
     lines: list[str] = []
     for i, r in enumerate(search_results[:5], start=1):
         score_pct = round(r.get("score", 0) * 100)
+        rt = r.get("result_type", "ticket")
+        if rt == "knowledge":
+            header = f"[{i}] KNOWLEDGE"
+        else:
+            ref = r.get("jira_id") or r.get("doc_id") or "?"
+            header = f"[{i}] {str(rt).upper()}: {ref}"
         block = [
-            f"[{i}] {r.get('result_type', 'ticket').upper()}: {r.get('jira_id')}",
+            header,
             f"    Title: {r.get('title')}",
             f"    Status: {r.get('status', 'Unknown')} | "
             f"BU: {r.get('business_unit', 'Unknown')} | Match: {score_pct}%",
@@ -49,6 +55,14 @@ def _format_results(search_results: list[dict]) -> str:
             block.append(f"    Root Cause: {metadata['root_cause'][:300]}")
         if metadata.get("long_term_fix"):
             block.append(f"    Long-term Fix: {metadata['long_term_fix'][:300]}")
+        if metadata.get("diagnostic_steps"):
+            block.append(f"    Diagnostic steps: {str(metadata['diagnostic_steps'])[:400]}")
+        if metadata.get("resolution_steps"):
+            block.append(f"    Resolution steps: {str(metadata['resolution_steps'])[:400]}")
+        if metadata.get("resolution"):
+            block.append(f"    Ticket resolution: {str(metadata['resolution'])[:500]}")
+        if metadata.get("discussion_preview"):
+            block.append(f"    Discussion: {str(metadata['discussion_preview'])[:500]}")
         lines.append("\n".join(block))
     return "\n\n".join(lines)
 

@@ -16,6 +16,7 @@ Work through **phases in order**. You do **not** need Docker on your laptop; use
 | **5b** | Cloud SQL: migrations + seeds | Schema + users (+ optional demo vectors) in **prod** DB |
 | **6** | Cloud Run: **frontend** | Next.js UI; rebuild image with real **`_NEXT_PUBLIC_API_URL`** after API URL exists |
 | **7** | Optional: `cloudbuild.embedding-worker.yaml` + `gcloud run jobs deploy` + Scheduler | **JIRA → pgvector** via Cloud Run Job **`cybmas-embedding-worker`** (not part of default GitHub Actions build) |
+| **7b** | Optional: `cloudbuild.kb-ingest-job.yaml` + `gcloud run jobs deploy` | **KB file in GCS → `knowledge_articles`** via Cloud Run Job **`cybmas-kb-ingest-job`** (same build pattern as Phase 7; see Phase 7b below) |
 
 More detail: `docs/DEPLOYMENT.md`, `docs/SECRETS.md`.
 
@@ -468,6 +469,69 @@ chmod +x scripts/setup_embedding_scheduler.sh
 ```
 
 Or see **`scripts/setup_embedding_scheduler.ps1`** on Windows. Adjust **`SCHEDULE`** (default `*/15 * * * *`) inside the script if needed.
+
+---
+
+## Phase 7b — KB JSON/JSONL from GCS → `knowledge_articles` (Cloud Run Job)
+
+Loads a **single object** from **Google Cloud Storage** (JSON with a `documents` array or **JSONL**), embeds with **Vertex** `text-embedding-004`, and **upserts** into **`knowledge_articles`** (migration **`005_knowledge_articles.sql`**). This job does **not** use Redis or JIRA.
+
+Build the image (not part of the default three-image **`cloudbuild.yaml`**):
+
+```bash
+gcloud builds submit --config=cloudbuild.kb-ingest-job.yaml --substitutions=_TAG=YOUR_TAG .
+```
+
+### Prereqs
+
+- **Cloud SQL** + **`database_url`** secret: use the **Unix socket** DSN form for Cloud Run (same as **`cybmas-orchestrator`**).
+- **Migration `005`** applied** on that database.
+- **GCS**: upload your KB file (e.g. `gs://YOUR_BUCKET/kb/articles.jsonl`). The job’s service account needs **`roles/storage.objectViewer`** on that bucket (or the object), or use a bucket with uniform access and grant the SA **Storage Object Viewer**.
+- **Vertex AI**: same project/region as the embedding worker (**`GCP_PROJECT_ID`**, **`VERTEX_AI_LOCATION`**).
+
+### Job env vars
+
+| Env var | Required | Purpose |
+|---------|----------|---------|
+| **`KB_GCS_URI`** | Yes | e.g. `gs://my-bucket/path/kb.json` or `.jsonl` |
+| **`DATABASE_URL`** | Yes | Usually from **`--set-secrets=database_url=database_url:latest`** (map to env name **`DATABASE_URL`**) |
+| **`GCP_PROJECT_ID`** | Yes | GCP project for Vertex |
+| **`VERTEX_AI_LOCATION`** | Yes | e.g. `us-central1` |
+| **`KB_THROTTLE_SECONDS`** | No | Sleep after each embed (rate limits); default `0` |
+
+### Deploy example
+
+Adjust **`PROJECT_ID`**, **`REGION`**, **`INSTANCE_CONNECTION_NAME`**, **`IMAGE_TAG`**, service account, and bucket URI.
+
+```bash
+export PROJECT_ID=YOUR_PROJECT_ID
+export REGION=us-central1
+export INSTANCE_CONNECTION_NAME=${PROJECT_ID}:${REGION}:YOUR_INSTANCE
+export IMAGE=${REGION}-docker.pkg.dev/${PROJECT_ID}/cybmas/kb-ingest-job:latest
+
+gcloud run jobs deploy cybmas-kb-ingest-job \
+  --image=${IMAGE} \
+  --region=${REGION} \
+  --project=${PROJECT_ID} \
+  --tasks=1 \
+  --max-retries=0 \
+  --task-timeout=3600 \
+  --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},VERTEX_AI_LOCATION=us-central1,KB_GCS_URI=gs://YOUR_BUCKET/path/kb.jsonl \
+  --set-secrets=DATABASE_URL=database_url:latest \
+  --add-cloudsql-instances=${INSTANCE_CONNECTION_NAME} \
+  --service-account=YOUR_ORCH_SA@${PROJECT_ID}.iam.gserviceaccount.com
+```
+
+**Note:** No **`--vpc-connector`** is required for GCS + Vertex alone. If you reuse the orchestrator SA, it likely already has Secret Manager + Cloud SQL Client + Vertex AI User; add **Storage Object Viewer** on the KB bucket.
+
+### Run (override `KB_GCS_URI` per execution if you prefer)
+
+```bash
+gcloud run jobs execute cybmas-kb-ingest-job --region=${REGION} --project=${PROJECT_ID} --wait
+
+gcloud run jobs execute cybmas-kb-ingest-job --region=${REGION} --project=${PROJECT_ID} \
+  --update-env-vars=KB_GCS_URI=gs://YOUR_BUCKET/other/kb.jsonl --wait
+```
 
 ---
 

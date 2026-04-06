@@ -208,11 +208,12 @@ class ToolResult(BaseModel):
 
 
 class SearchResult(BaseModel):
-    jira_id: str
     title: str
     summary: Optional[str] = None
     score: float
-    result_type: Literal["ticket", "incident"]
+    result_type: Literal["ticket", "incident", "knowledge"]
+    jira_id: Optional[str] = None
+    doc_id: Optional[str] = None
     status: Optional[str] = None
     business_unit: Optional[str] = None
     metadata: Optional[dict] = None

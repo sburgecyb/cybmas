@@ -1,4 +1,4 @@
-"""pgvector upsert operations for tickets and incidents.
+"""pgvector upsert operations for tickets, incidents, and knowledge articles.
 
 asyncpg does not natively understand the pgvector ``vector`` type, so
 embeddings are formatted as PostgreSQL array-literal strings and cast
@@ -9,7 +9,7 @@ Timestamps from JIRA ISO strings are parsed to timezone-aware datetimes
 so asyncpg can bind them natively.
 """
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import asyncpg
 import structlog
@@ -53,6 +53,23 @@ def _parse_dt(value: "str | datetime | None") -> datetime | None:
     normalised = value.replace("+0000", "+00:00")
     try:
         return datetime.fromisoformat(normalised)
+    except ValueError:
+        return None
+
+
+def _parse_date(value: "str | date | datetime | None") -> date | None:
+    """Parse YYYY-MM-DD or ISO date/time for a PostgreSQL DATE column."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
     except ValueError:
         return None
 
@@ -178,3 +195,62 @@ async def upsert_incident(
         )
 
     log.info("upsert.incident_upserted", jira_id=jira_id)
+
+
+_UPSERT_KB_SQL = """
+INSERT INTO knowledge_articles (
+    doc_id, title, category, level, tags, problem_statement,
+    symptoms, possible_causes, diagnostic_steps, resolution_steps, validation,
+    confidence_score, last_updated, embedding, raw_json
+) VALUES (
+    $1, $2, $3, $4, $5::jsonb, $6,
+    $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb,
+    $12, $13, $14::vector, $15::jsonb
+)
+ON CONFLICT (doc_id) DO UPDATE SET
+    title              = EXCLUDED.title,
+    category           = EXCLUDED.category,
+    level              = EXCLUDED.level,
+    tags               = EXCLUDED.tags,
+    problem_statement  = EXCLUDED.problem_statement,
+    symptoms           = EXCLUDED.symptoms,
+    possible_causes    = EXCLUDED.possible_causes,
+    diagnostic_steps   = EXCLUDED.diagnostic_steps,
+    resolution_steps   = EXCLUDED.resolution_steps,
+    validation         = EXCLUDED.validation,
+    confidence_score   = EXCLUDED.confidence_score,
+    last_updated       = EXCLUDED.last_updated,
+    embedding          = EXCLUDED.embedding,
+    raw_json           = EXCLUDED.raw_json
+"""
+
+
+async def upsert_kb_article(
+    pool: asyncpg.Pool,
+    article: dict,
+    embedding: list[float],
+) -> None:
+    """Insert or update a knowledge_articles row including its embedding."""
+    doc_id: str = article["doc_id"]
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            _UPSERT_KB_SQL,
+            doc_id,
+            article.get("title", ""),
+            article.get("category"),
+            article.get("level"),
+            _to_json(article.get("tags")),
+            article.get("problem_statement"),
+            _to_json(article.get("symptoms")),
+            _to_json(article.get("possible_causes")),
+            _to_json(article.get("diagnostic_steps")),
+            _to_json(article.get("resolution_steps")),
+            _to_json(article.get("validation")),
+            article.get("confidence_score"),
+            _parse_date(article.get("last_updated")),
+            _to_vector_str(embedding),
+            _to_json(article.get("raw_json") or article),
+        )
+
+    log.info("upsert.kb_article_upserted", doc_id=doc_id)

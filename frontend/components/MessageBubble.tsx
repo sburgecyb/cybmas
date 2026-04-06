@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import type { ChatMessage } from '@/lib/api'
 import SourcesPanel from './SourcesPanel'
 import FeedbackWidget from './FeedbackWidget'
@@ -11,18 +12,41 @@ interface Props {
   isStreaming?: boolean
 }
 
+/** Inline ``**bold**`` — used inside list items too (list branch used to skip this). */
+function renderInlineBold(text: string, keyPrefix: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/)
+  return parts.map((p, j) => {
+    if (p.startsWith('**') && p.endsWith('**') && p.length >= 4) {
+      return <strong key={`${keyPrefix}-${j}`}>{p.slice(2, -2)}</strong>
+    }
+    return <span key={`${keyPrefix}-${j}`}>{p}</span>
+  })
+}
+
 function SimpleMarkdown({ text }: { text: string }) {
   const lines = text.split('\n')
   return (
     <div className="space-y-1">
       {lines.map((line, i) => {
-        if (line.startsWith('## ')) return <h3 key={i} className="font-semibold text-base mt-2">{line.slice(3)}</h3>
-        if (line.startsWith('# ')) return <h2 key={i} className="font-bold text-lg mt-2">{line.slice(2)}</h2>
+        if (line.startsWith('## ')) {
+          return (
+            <h3 key={i} className="font-semibold text-base mt-2">
+              {renderInlineBold(line.slice(3), `h3-${i}`)}
+            </h3>
+          )
+        }
+        if (line.startsWith('# ')) {
+          return (
+            <h2 key={i} className="font-bold text-lg mt-2">
+              {renderInlineBold(line.slice(2), `h2-${i}`)}
+            </h2>
+          )
+        }
         if (line.startsWith('- ') || line.startsWith('* ')) {
           return (
             <div key={i} className="flex gap-2">
               <span className="text-gray-400 shrink-0">•</span>
-              <span>{line.slice(2)}</span>
+              <span>{renderInlineBold(line.slice(2), `li-${i}`)}</span>
             </div>
           )
         }
@@ -31,20 +55,14 @@ function SimpleMarkdown({ text }: { text: string }) {
           return (
             <div key={i} className="flex gap-2">
               <span className="text-gray-400 shrink-0 tabular-nums">{num}.</span>
-              <span>{rest.join('. ')}</span>
+              <span>{renderInlineBold(rest.join('. '), `ol-${i}`)}</span>
             </div>
           )
         }
         if (line === '') return <div key={i} className="h-1" />
-        // Inline bold: **text**
-        const parts = line.split(/(\*\*[^*]+\*\*)/)
         return (
           <p key={i}>
-            {parts.map((p, j) =>
-              p.startsWith('**') && p.endsWith('**')
-                ? <strong key={j}>{p.slice(2, -2)}</strong>
-                : p
-            )}
+            {renderInlineBold(line, `p-${i}`)}
           </p>
         )
       })}

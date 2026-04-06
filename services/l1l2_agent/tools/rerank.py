@@ -25,7 +25,13 @@ def _score_result(query_words: set[str], result: dict) -> float:
 
     title = (result.get("title") or "").lower()
     summary = (result.get("summary") or "").lower()
-    text_words = set((title + " " + summary).split())
+    jira = (result.get("jira_id") or "").lower()
+    meta = result.get("metadata") or {}
+    res = (meta.get("resolution") or "").lower()
+    disc = (meta.get("discussion_preview") or "").lower()
+    text_words = set(
+        (title + " " + summary + " " + jira + " " + res + " " + disc).split()
+    )
     overlap = len(query_words & text_words)
     keyword_bonus = min(overlap * 0.02, 0.1)
 

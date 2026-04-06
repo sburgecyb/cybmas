@@ -1,0 +1,7 @@
+# Align with embedding worker + KB ingest (Vertex + asyncpg + GCS)
+google-cloud-aiplatform>=1.57.0,<2
+google-cloud-storage>=2.14.0
+asyncpg==0.29.0
+structlog==24.1.0
+python-dotenv==1.0.1
+pydantic>=2.0

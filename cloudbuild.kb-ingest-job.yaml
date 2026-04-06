@@ -1,0 +1,34 @@
+# Build + push Cloud Run Job image: KB file in GCS → knowledge_articles (pgvector).
+#
+# From repo root:
+#   gcloud builds submit --config=cloudbuild.kb-ingest-job.yaml --substitutions=_TAG=abc1234 .
+#
+# Same substitutions pattern as cloudbuild.embedding-worker.yaml.
+
+substitutions:
+  _REGION: us-central1
+  _REPO: cybmas
+  _TAG: latest
+
+steps:
+  - id: build-kb-ingest-job
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - pipeline/kb_ingest_job/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/kb-ingest-job:${_TAG}
+      - .
+
+  - id: push-kb-ingest-job
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/kb-ingest-job:${_TAG}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/kb-ingest-job:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

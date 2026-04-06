@@ -80,7 +80,8 @@ export default function ChatWindow({ initialSessionId, engineerId }: Props) {
           setMessages(prev => {
             const updated = [...prev]
             const last = { ...updated[updated.length - 1] }
-            last.sources = event.sources
+            const prior = last.sources ?? []
+            last.sources = [...prior, ...event.sources]
             updated[updated.length - 1] = last
             return updated
           })

@@ -9,13 +9,15 @@ const API_URL = apiBaseUrl()
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface SearchResult {
-  jira_id: string
+  jira_id?: string
+  doc_id?: string
   title: string
   summary?: string
   score: number
-  result_type: 'ticket' | 'incident'
+  result_type: 'ticket' | 'incident' | 'knowledge'
   status?: string
   business_unit?: string
+  metadata?: Record<string, unknown>
 }
 
 export interface SSEEvent {

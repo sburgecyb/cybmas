@@ -34,24 +34,31 @@ export default function SourcesPanel({ sources }: Props) {
       {open && (
         <div className="divide-y divide-gray-100 dark:divide-gray-800">
           {sources.map((src, i) => {
-            const isIncident = src.result_type === 'incident'
+            const rt = String(src.result_type ?? '').toLowerCase()
+            const isIncident = rt === 'incident'
+            const isKnowledge = rt === 'knowledge'
+            const refLabel = src.jira_id ?? src.doc_id ?? '—'
+            const badgeClass = isKnowledge
+              ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300'
+              : isIncident
+                ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+            const typeClass = isKnowledge
+              ? 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400'
+              : isIncident
+                ? 'bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-500'
+                : 'bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-500'
             return (
               <div key={i} className="px-3 py-2.5 text-xs space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  {/* JIRA ID badge */}
-                  <span className={`px-1.5 py-0.5 rounded font-mono font-semibold
-                    ${isIncident
-                      ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
-                      : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                    }`}>
-                    {src.jira_id}
-                  </span>
+                  {/* JIRA key for tickets/incidents; omit KB doc_id for knowledge articles */}
+                  {!isKnowledge && (
+                    <span className={`px-1.5 py-0.5 rounded font-mono font-semibold ${badgeClass}`}>
+                      {refLabel}
+                    </span>
+                  )}
                   {/* Type */}
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide font-medium
-                    ${isIncident
-                      ? 'bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-500'
-                      : 'bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-500'
-                    }`}>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide font-medium ${typeClass}`}>
                     {src.result_type}
                   </span>
                   {/* Status */}
