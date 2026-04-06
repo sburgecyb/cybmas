@@ -77,11 +77,12 @@ export default function ChatWindow({ initialSessionId, engineerId }: Props) {
             return updated
           })
         } else if (event.type === 'sources' && event.sources) {
+          const sourceBatch = event.sources
           setMessages(prev => {
             const updated = [...prev]
             const last = { ...updated[updated.length - 1] }
             const prior = last.sources ?? []
-            last.sources = [...prior, ...event.sources]
+            last.sources = [...prior, ...sourceBatch]
             updated[updated.length - 1] = last
             return updated
           })
