@@ -78,6 +78,7 @@ Cloud Run Jobs:
 |---|---|---|
 | Embedding Worker | `cybmas-embedding-worker` | Optional: build with **`cloudbuild.embedding-worker.yaml`**; deploy job manually; run via **`gcloud run jobs execute`** or Scheduler (`deploy/README.md` Phase 7) |
 | KB ingest | `cybmas-kb-ingest-job` | Optional: build with **`cloudbuild.kb-ingest-job.yaml`**; GCS file → **`knowledge_articles`** (`deploy/README.md` Phase 7b) |
+| Seed sample data | `cybmas-seed-sample-job` | Optional: build with **`cloudbuild.seed-sample-job.yaml`**; **`seed_sample_data.py`** → **`tickets` / `incidents`** (`deploy/README.md` Phase 7c) |
 
 ---
 
@@ -88,6 +89,7 @@ Cloud Run Jobs:
 | `cloudbuild.yaml` | `gcloud builds submit` or Cloud Build trigger | Any | Build & push **api-gateway** + **orchestrator** + **frontend** (`deploy/README.md`; set **`_NEXT_PUBLIC_API_URL`** for prod UI) |
 | `cloudbuild.embedding-worker.yaml` | Manual / separate trigger | Any | Build & push **embedding-worker** only (Phase 7) |
 | `cloudbuild.kb-ingest-job.yaml` | Manual / separate trigger | Any | Build & push **kb-ingest-job** only (Phase 7b) |
+| `cloudbuild.seed-sample-job.yaml` | Manual / separate trigger | Any | Build & push **seed-sample-job** only (Phase 7c) |
 | `cloudbuild.dev.yaml` | Push to `develop` | Dev | Fast deploy *(add when needed)* |
 | `cloudbuild.infra.yaml` | Manual only | Any | Terraform apply *(add when needed)* |
 | `cloudbuild.pipeline.yaml` | Cloud Scheduler / manual | Production | JIRA full sync *(add when needed)* |

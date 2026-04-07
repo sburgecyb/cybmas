@@ -88,7 +88,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4008",
+      "jira_id": "B1-4008",
       "business_unit": "B1",
       "ticket_type": "Task",
       "summary": "Payment failures during checkout",
@@ -190,7 +190,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4013",
+      "jira_id": "B1-4013",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "Payment failures during checkout",
@@ -241,7 +241,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4018",
+      "jira_id": "B1-4018",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "Search results inconsistent across regions",
@@ -394,7 +394,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4021",
+      "jira_id": "B1-4021",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Notification delay in email service",
@@ -496,7 +496,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4024",
+      "jira_id": "B1-4024",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "User sessions dropping unexpectedly",
@@ -547,7 +547,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4027",
+      "jira_id": "B1-4027",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Payment failures during checkout",
@@ -598,7 +598,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4031",
+      "jira_id": "B1-4031",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Payment failures during checkout",
@@ -751,7 +751,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4036",
+      "jira_id": "B1-4036",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "Payment failures during checkout",
@@ -853,7 +853,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4038",
+      "jira_id": "B1-4038",
       "business_unit": "B1",
       "ticket_type": "Task",
       "summary": "Notification delay in email service",
@@ -904,7 +904,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4042",
+      "jira_id": "B1-4042",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Payment failures during checkout",
@@ -1006,7 +1006,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4050",
+      "jira_id": "B1-4050",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Notification delay in email service",
@@ -1057,7 +1057,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4067",
+      "jira_id": "B1-4067",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "User sessions dropping unexpectedly",
@@ -1108,7 +1108,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4068",
+      "jira_id": "B1-4068",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "High latency in recommendation engine",
@@ -1210,7 +1210,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4076",
+      "jira_id": "B1-4076",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Search results inconsistent across regions",
@@ -1312,7 +1312,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4079",
+      "jira_id": "B1-4079",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Payment failures during checkout",
@@ -1363,7 +1363,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4080",
+      "jira_id": "B1-4080",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "User sessions dropping unexpectedly",
@@ -1414,7 +1414,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4081",
+      "jira_id": "B1-4081",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "Payment failures during checkout",
@@ -1465,7 +1465,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4084",
+      "jira_id": "B1-4084",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "Search results inconsistent across regions",
@@ -1516,7 +1516,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4085",
+      "jira_id": "B1-4085",
       "business_unit": "B1",
       "ticket_type": "Story",
       "summary": "High latency in recommendation engine",
@@ -1720,7 +1720,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4095",
+      "jira_id": "B1-4095",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "High latency in recommendation engine",
@@ -1873,7 +1873,7 @@ _B1_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B2-4099",
+      "jira_id": "B1-4099",
       "business_unit": "B1",
       "ticket_type": "Bug",
       "summary": "High latency in recommendation engine",
@@ -1927,7 +1927,7 @@ _B1_TICKETS: list[dict] = [
 
 _B2_TICKETS: list[dict] = [
    {
-      "jira_id": "B1-4000",
+      "jira_id": "B2-4000",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "Search results inconsistent across regions",
@@ -2131,7 +2131,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4005",
+      "jira_id": "B2-4005",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "High latency in recommendation engine",
@@ -2182,7 +2182,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4006",
+      "jira_id": "B2-4006",
       "business_unit": "B2",
       "ticket_type": "Story",
       "summary": "Search results inconsistent across regions",
@@ -2335,7 +2335,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4014",
+      "jira_id": "B2-4014",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "User sessions dropping unexpectedly",
@@ -2386,7 +2386,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4015",
+      "jira_id": "B2-4015",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "Search results inconsistent across regions",
@@ -2437,7 +2437,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4017",
+      "jira_id": "B2-4017",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "Search results inconsistent across regions",
@@ -2488,7 +2488,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4023",
+      "jira_id": "B2-4023",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "Notification delay in email service",
@@ -2590,7 +2590,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4030",
+      "jira_id": "B2-4030",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "Notification delay in email service",
@@ -2692,7 +2692,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4035",
+      "jira_id": "B2-4035",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "Search results inconsistent across regions",
@@ -2794,7 +2794,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4043",
+      "jira_id": "B2-4043",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "Notification delay in email service",
@@ -2896,7 +2896,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4048",
+      "jira_id": "B2-4048",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "Notification delay in email service",
@@ -2998,7 +2998,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4054",
+      "jira_id": "B2-4054",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "User sessions dropping unexpectedly",
@@ -3049,7 +3049,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4056",
+      "jira_id": "B2-4056",
       "business_unit": "B2",
       "ticket_type": "Story",
       "summary": "User sessions dropping unexpectedly",
@@ -3151,7 +3151,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4060",
+      "jira_id": "B2-4060",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "High latency in recommendation engine",
@@ -3202,7 +3202,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4061",
+      "jira_id": "B2-4061",
       "business_unit": "B2",
       "ticket_type": "Story",
       "summary": "High latency in recommendation engine",
@@ -3304,7 +3304,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4064",
+      "jira_id": "B2-4064",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "High latency in recommendation engine",
@@ -3406,7 +3406,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4071",
+      "jira_id": "B2-4071",
       "business_unit": "B2",
       "ticket_type": "Task",
       "summary": "Search results inconsistent across regions",
@@ -3457,7 +3457,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4074",
+      "jira_id": "B2-4074",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "Notification delay in email service",
@@ -3661,7 +3661,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4087",
+      "jira_id": "B2-4087",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "Payment failures during checkout",
@@ -3712,7 +3712,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4088",
+      "jira_id": "B2-4088",
       "business_unit": "B2",
       "ticket_type": "Story",
       "summary": "Notification delay in email service",
@@ -3763,7 +3763,7 @@ _B2_TICKETS: list[dict] = [
       ]
     },
     {
-      "jira_id": "B1-4089",
+      "jira_id": "B2-4089",
       "business_unit": "B2",
       "ticket_type": "Bug",
       "summary": "User sessions dropping unexpectedly",
@@ -5363,7 +5363,10 @@ async def main() -> None:
         "postgresql+asyncpg://", "postgresql://"
     )
     if not dsn:
-        print("ERROR: DATABASE_URL not set in .env.local", file=sys.stderr)
+        print(
+            "ERROR: DATABASE_URL is not set (use .env.local locally or env/secret on Cloud Run).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5)

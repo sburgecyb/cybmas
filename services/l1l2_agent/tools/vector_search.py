@@ -153,6 +153,95 @@ def _ticket_metadata(row: dict) -> dict:
     }
 
 
+async def ticket_search_with_vector_str(
+    pool,
+    query_text: str,
+    vector_str: str,
+    business_units: list[str],
+    *,
+    top_k: int = 10,
+    ticket_type_filter: str | None = None,
+) -> list[dict]:
+    """Run ticket vector + lexical merge + rerank using a precomputed embedding string."""
+    clamped_top_k = min(max(1, top_k), 50)
+    type_filter = (ticket_type_filter.strip() if ticket_type_filter else None) or None
+    fetch_limit = min(50, max(clamped_top_k * 4, clamped_top_k + 25))
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            _SEARCH_SQL,
+            vector_str,
+            business_units,
+            type_filter,
+            fetch_limit,
+        )
+        if not rows and type_filter:
+            log.warning(
+                "search_tickets.retry_without_type_filter",
+                dropped_filter=type_filter,
+            )
+            rows = await conn.fetch(
+                _SEARCH_SQL,
+                vector_str,
+                business_units,
+                None,
+                fetch_limit,
+            )
+
+        qstrip = query_text.strip()
+        terms = significant_terms(query_text)
+        lex_min = _min_lexical_term_hits(len(terms))
+        lexical_rows: list = []
+        if len(qstrip) >= 8 or len(terms) >= 2:
+            lexical_rows = await conn.fetch(
+                _LEXICAL_TICKETS_SQL,
+                business_units,
+                type_filter,
+                qstrip[:500],
+                terms,
+                lex_min,
+            )
+            if not lexical_rows and type_filter:
+                lexical_rows = await conn.fetch(
+                    _LEXICAL_TICKETS_SQL,
+                    business_units,
+                    None,
+                    qstrip[:500],
+                    terms,
+                    lex_min,
+                )
+
+    by_jira: dict[str, dict] = {}
+    for row in rows:
+        by_jira[row["jira_id"]] = dict(row)
+    for row in lexical_rows:
+        jid = row["jira_id"]
+        if jid not in by_jira:
+            by_jira[jid] = dict(row)
+        else:
+            prev = float(by_jira[jid]["score"])
+            nxt = float(row["score"])
+            merged = dict(by_jira[jid])
+            merged["score"] = max(prev, nxt)
+            by_jira[jid] = merged
+
+    merged_rows = list(by_jira.values())
+    results = [
+        SearchResult(
+            jira_id=row["jira_id"],
+            title=row["summary"],
+            summary=row["description"][:400] if row["description"] else None,
+            score=float(row["score"]),
+            result_type="ticket",
+            status=row["status"],
+            business_unit=row["business_unit"],
+            metadata=_ticket_metadata(row),
+        ).model_dump()
+        for row in merged_rows
+    ]
+    return apply_keyword_rerank(query_text, results, top_n=clamped_top_k)
+
+
 # ── Tool ───────────────────────────────────────────────────────────────────────
 
 
@@ -193,92 +282,14 @@ async def search_tickets(
         query_vector = await embed_text(query_text)
         vector_str = _to_vector_str(query_vector)
 
-        clamped_top_k = min(max(1, top_k), 50)
-        type_filter = (ticket_type_filter.strip() if ticket_type_filter else None) or None
-
-        # Fetch more vector neighbors than we return: keyword rerank can promote
-        # tickets whose title/description align with the query but rank lower on
-        # embedding alone (LIMIT top_k before rerank would drop them entirely).
-        fetch_limit = min(50, max(clamped_top_k * 4, clamped_top_k + 25))
-
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                _SEARCH_SQL,
-                vector_str,
-                business_units,
-                type_filter,
-                fetch_limit,
-            )
-            # Model often passes a type filter for vague "issues" queries; if
-            # nothing matches, retry once without a type filter.
-            if not rows and type_filter:
-                log.warning(
-                    "search_tickets.retry_without_type_filter",
-                    dropped_filter=type_filter,
-                )
-                rows = await conn.fetch(
-                    _SEARCH_SQL,
-                    vector_str,
-                    business_units,
-                    None,
-                    fetch_limit,
-                )
-
-            qstrip = query_text.strip()
-            terms = significant_terms(query_text)
-            lex_min = _min_lexical_term_hits(len(terms))
-            lexical_rows: list = []
-            if len(qstrip) >= 8 or len(terms) >= 2:
-                lexical_rows = await conn.fetch(
-                    _LEXICAL_TICKETS_SQL,
-                    business_units,
-                    type_filter,
-                    qstrip[:500],
-                    terms,
-                    lex_min,
-                )
-                if not lexical_rows and type_filter:
-                    lexical_rows = await conn.fetch(
-                        _LEXICAL_TICKETS_SQL,
-                        business_units,
-                        None,
-                        qstrip[:500],
-                        terms,
-                        lex_min,
-                    )
-
-        by_jira: dict[str, dict] = {}
-        for row in rows:
-            by_jira[row["jira_id"]] = dict(row)
-        for row in lexical_rows:
-            jid = row["jira_id"]
-            if jid not in by_jira:
-                by_jira[jid] = dict(row)
-            else:
-                prev = float(by_jira[jid]["score"])
-                nxt = float(row["score"])
-                merged = dict(by_jira[jid])
-                merged["score"] = max(prev, nxt)
-                by_jira[jid] = merged
-
-        merged_rows = list(by_jira.values())
-
-        results = [
-            SearchResult(
-                jira_id=row["jira_id"],
-                title=row["summary"],
-                summary=row["description"][:400] if row["description"] else None,
-                score=float(row["score"]),
-                result_type="ticket",
-                status=row["status"],
-                business_unit=row["business_unit"],
-                metadata=_ticket_metadata(row),
-            ).model_dump()
-            for row in merged_rows
-        ]
-
-        # Keyword rerank in-process (avoids a separate Gemini tool round-trip).
-        results = apply_keyword_rerank(query_text, results, top_n=clamped_top_k)
+        results = await ticket_search_with_vector_str(
+            pool,
+            query_text,
+            vector_str,
+            business_units,
+            top_k=top_k,
+            ticket_type_filter=ticket_type_filter,
+        )
 
         latency_ms = round((time.time() - start) * 1000)
         log.info(

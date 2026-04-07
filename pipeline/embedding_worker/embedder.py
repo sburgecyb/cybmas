@@ -4,9 +4,15 @@ Initialisation is lazy — vertexai.init() and model loading happen on the
 first call to embed_text() or embed_batch(), not at import time.
 This means the module can be imported safely in tests and tools without
 GCP_PROJECT_ID being set in the environment.
+
+``embed_text`` uses a small in-process TTL cache (normalized query) so
+back-to-back tool calls with the same text skip a redundant Vertex round-trip.
 """
 import asyncio
+import hashlib
 import os
+import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import structlog
@@ -17,6 +23,11 @@ log = structlog.get_logger()
 
 _EMBED_TEXT_MAX_CHARS: int = 2000
 _BATCH_SIZE: int = 5
+_EMBED_CACHE_TTL_SEC: float = float(os.getenv("EMBED_CACHE_TTL_SEC", "120"))
+_EMBED_CACHE_MAX: int = int(os.getenv("EMBED_CACHE_MAX_ENTRIES", "256"))
+
+# sha256 hex -> (monotonic_expiry, vector) — LRU via OrderedDict move_to_end
+_embed_text_cache: OrderedDict[str, tuple[float, list[float]]] = OrderedDict()
 
 # ── Lazy singletons ────────────────────────────────────────────────────────────
 
@@ -39,6 +50,13 @@ def _get_model() -> TextEmbeddingModel:
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
+def _embed_cache_evict_expired(now: float) -> None:
+    """Remove entries past TTL (any position)."""
+    stale = [k for k, (exp, _) in _embed_text_cache.items() if exp <= now]
+    for k in stale:
+        del _embed_text_cache[k]
+
+
 async def embed_text(text: str) -> list[float]:
     """Embed a single text string using Vertex AI text-embedding-004.
 
@@ -54,6 +72,19 @@ async def embed_text(text: str) -> list[float]:
     if len(text) > _EMBED_TEXT_MAX_CHARS:
         text = text[:_EMBED_TEXT_MAX_CHARS]
 
+    norm = text.strip().lower()
+    cache_key = hashlib.sha256(norm.encode("utf-8")).hexdigest()
+    now = time.monotonic()
+    _embed_cache_evict_expired(now)
+
+    hit = _embed_text_cache.get(cache_key)
+    if hit is not None:
+        exp, vec = hit
+        if exp > now:
+            _embed_text_cache.move_to_end(cache_key)
+            log.info("embedder.cache_hit", text_length=len(text), dims=len(vec))
+            return list(vec)
+
     model = _get_model()
     loop = asyncio.get_running_loop()
     embeddings = await loop.run_in_executor(
@@ -61,6 +92,11 @@ async def embed_text(text: str) -> list[float]:
         lambda: model.get_embeddings([text]),
     )
     result: list[float] = list(embeddings[0].values)
+
+    _embed_text_cache[cache_key] = (now + _EMBED_CACHE_TTL_SEC, result)
+    _embed_text_cache.move_to_end(cache_key)
+    while len(_embed_text_cache) > _EMBED_CACHE_MAX:
+        _embed_text_cache.popitem(last=False)
 
     log.info("embedder.embedding_generated", text_length=len(text), dims=len(result))
     return result

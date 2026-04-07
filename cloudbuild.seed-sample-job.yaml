@@ -1,0 +1,34 @@
+# Build + push Cloud Run Job image: seed_sample_data.py → tickets/incidents (pgvector).
+#
+# From repo root:
+#   gcloud builds submit --config=cloudbuild.seed-sample-job.yaml --substitutions=_TAG=abc1234 .
+#
+# Same substitutions pattern as cloudbuild.kb-ingest-job.yaml.
+
+substitutions:
+  _REGION: us-central1
+  _REPO: cybmas
+  _TAG: latest
+
+steps:
+  - id: build-seed-sample-job
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - pipeline/seed_sample_job/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/seed-sample-job:${_TAG}
+      - .
+
+  - id: push-seed-sample-job
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/seed-sample-job:${_TAG}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/seed-sample-job:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

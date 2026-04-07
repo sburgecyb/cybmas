@@ -8,13 +8,12 @@ Architecture:
      before the final answer arrives.
   4. JIRA ID lookups bypass ADK entirely (instant DB lookup, no value in LLM).
 
-Request timeline (gemini-2.5-flash):
+Request timeline (gemini-2.5-flash, typical):
   0 ms   — intent classified (keyword rules)
-  ~500ms — ADK: LLM decides to call search_tickets
-  ~4s    — search_tickets: embed query (Vertex AI) + pgvector search
-  ~500ms — ADK: after search_tickets → sources SSE sent (rerank is inline in search)
+  ~500ms — ADK: LLM decides to call search_kb_and_tickets (or a single search tool)
+  ~2-4s  — one Vertex embed + parallel KB + ticket DB (vs two embeds when two tools)
+  ~500ms — ADK: after tool → sources SSE (merged knowledge + tickets)
   ~1-2s  — ADK: LLM streams final answer tokens
-  ~6-7s  — done event
 
 Run with:
     python -m uvicorn server:app --port 8001 --reload
@@ -192,17 +191,32 @@ _SEARCH_TOOLS_FOR_SSE = frozenset({
     "search_tickets",
     "search_incidents",
     "search_knowledge_base",
+    "search_kb_and_tickets",
 })
 
 
 def _extract_search_tool_payload(fn_resp) -> list | None:
-    """Return result rows from search_* tools, or None."""
+    """Return result rows from search_* tools, or None.
+
+    ``search_kb_and_tickets`` returns ``{knowledge: [...], tickets: [...]}``;
+    merge for one SSE ``sources`` payload (knowledge rows first).
+    """
     raw = _coerce_mapping(getattr(fn_resp, "response", None))
     if raw.get("success") is False:
         return None
     data = raw.get("data")
     if isinstance(data, list) and len(data) > 0:
         return data
+    if isinstance(data, dict):
+        know = data.get("knowledge")
+        tix = data.get("tickets")
+        merged: list = []
+        if isinstance(know, list):
+            merged.extend(know)
+        if isinstance(tix, list):
+            merged.extend(tix)
+        if len(merged) > 0:
+            return merged
     return None
 
 

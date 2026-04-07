@@ -26,6 +26,7 @@ from services.l1l2_agent.tools.jira_fetch import (  # noqa: E402
     check_ticket_status,
     fetch_jira_ticket,
 )
+from services.l1l2_agent.tools.combined_search import search_kb_and_tickets  # noqa: E402
 from services.l1l2_agent.tools.kb_search import search_knowledge_base  # noqa: E402
 from services.l1l2_agent.tools.vector_search import search_tickets  # noqa: E402
 
@@ -38,39 +39,38 @@ using the global knowledge base and historical tickets.
 RULES:
 1. If the message contains a specific JIRA issue key (pattern like B1-1234,
    KAN-4, PROJ-42 — letters/numbers, hyphen, digits), you MUST call
-   fetch_jira_ticket or check_ticket_status BEFORE search_tickets. Never answer
+   fetch_jira_ticket or check_ticket_status BEFORE any search tool. Never answer
    "not in the knowledge base" for a concrete issue key without calling one
    of those JIRA tools first.
 2. If they only ask about status / assignee / resolution of that key, call
    check_ticket_status; otherwise call fetch_jira_ticket for full details.
 3. For questions without an issue key:
-   - Call search_knowledge_base when the user wants troubleshooting guidance,
-     diagnostic steps, possible causes, resolutions, validation, or generic
-     "how to" support topics (no BU filter on KB).
-   - Call search_tickets to find similar past JIRA tickets; always pass the
-     business_units from the message context — never omit BU scoping for tickets.
+   - **Default:** call **search_kb_and_tickets** once — it searches the
+     knowledge base **and** scoped tickets with one embedding (fastest path).
+     Always pass **business_units** from the message context for the ticket leg.
+   - Use **search_knowledge_base** alone only when you need KB-only optional
+     filters (category, level, tags_any) that the combined tool supports **and**
+     tickets are irrelevant for that turn (rare).
+   - Use **search_tickets** alone only when the user clearly wants **only** past
+     JIRA examples with **no** KB playbooks (rare).
    - If the user describes **broken behavior**, **something not working**, or
-     asks for a **resolution** / fix for a **product or feature** (e.g. loyalty,
-     payments, checkout, login), you MUST call **search_tickets** as well as
-     **search_knowledge_base** in the same turn — KB alone is not enough; past
-     tickets often hold the real fix. Only skip ticket search for pure "what
-     is X?" documentation questions with no malfunction.
-   - For other problems, still prefer BOTH when unsure: KB for playbooks,
-     tickets for real examples. Order is flexible.
-   (search_tickets and search_knowledge_base apply keyword reranking; do not
-   call a second search-only tool just for ordering.)
-   Only pass ticket_type_filter when the user explicitly asks for a Jira work
-   type (e.g. "only bugs", "incident tickets"). For broad questions like
-   "refund issues" or "login problems", omit ticket_type_filter — the word
-   "issues" does not mean ticket type Bug.
-   Use search_knowledge_base optional filters (category, level, tags_any) only
-   when the user clearly names a category, level, or tag.
+     wants a **resolution** for a **product or feature**, **search_kb_and_tickets**
+     is required (it covers both corpora). Pure "what is X?" documentation
+     without malfunction may still use **search_kb_and_tickets** or KB-only if
+     tickets add no value.
+   Do **not** call **search_knowledge_base** and **search_tickets** separately
+   in the same turn when **search_kb_and_tickets** would suffice — that wastes
+   latency.
+   Only pass **ticket_type_filter** when the user explicitly asks for a Jira work
+   type (e.g. "only bugs"). For broad questions like "refund issues", omit it.
+   Pass **category** / **level** / **tags_any** to **search_kb_and_tickets** only
+   when the user clearly names them.
 4. After gathering results, write a clear technical answer yourself —
    cite **JIRA issue keys** (e.g. B1-1234) where relevant. For **knowledge
    articles**, refer by **title or topic only** — never mention internal KB
    doc IDs, article numbers, or ``doc_id`` values (users must not see them).
    For tickets, **prioritize** ``metadata.resolution`` and
-   ``metadata.discussion_preview`` from search_tickets when describing what
+   ``metadata.discussion_preview`` from ticket hits when describing what
    was tried and how issues were fixed; use KB articles for generic playbooks
    when ticket fields are empty. Never dump raw JSON.
 5. Vector similarity scores below 0.6 are common for paraphrased questions.
@@ -90,6 +90,7 @@ agent = LlmAgent(
     ),
     instruction=SYSTEM_INSTRUCTION,
     tools=[
+        search_kb_and_tickets,
         search_knowledge_base,
         search_tickets,
         fetch_jira_ticket,

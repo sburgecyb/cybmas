@@ -17,6 +17,7 @@ Work through **phases in order**. You do **not** need Docker on your laptop; use
 | **6** | Cloud Run: **frontend** | Next.js UI; rebuild image with real **`_NEXT_PUBLIC_API_URL`** after API URL exists |
 | **7** | Optional: `cloudbuild.embedding-worker.yaml` + `gcloud run jobs deploy` + Scheduler | **JIRA → pgvector** via Cloud Run Job **`cybmas-embedding-worker`** (not part of default GitHub Actions build) |
 | **7b** | Optional: `cloudbuild.kb-ingest-job.yaml` + `gcloud run jobs deploy` | **KB file in GCS → `knowledge_articles`** via Cloud Run Job **`cybmas-kb-ingest-job`** (same build pattern as Phase 7; see Phase 7b below) |
+| **7c** | Optional: `cloudbuild.seed-sample-job.yaml` + `gcloud run jobs deploy` | **Demo `seed_sample_data.py` → `tickets` / `incidents`** via Cloud Run Job **`cybmas-seed-sample-job`** (Phase 7c below) |
 
 More detail: `docs/DEPLOYMENT.md`, `docs/SECRETS.md`.
 
@@ -218,6 +219,8 @@ gcloud run deploy cybmas-orchestrator \
 ```
 
 After deploy, open **`/health`** on the orchestrator URL and confirm JSON shows **`"configured": true`** under **`jira_live`**. If **`missing_env`** is non-empty, add those variables and redeploy.
+
+**Latency / cold starts:** Chat runs ADK + Vertex + DB on this service. For steadier response times in production, set **`--min-instances=1`** (or higher) on **`cybmas-orchestrator`** so the container stays warm; compare **`search_kb_and_tickets.complete`** / **`embed_ms`** / **`db_parallel_ms`** in Cloud Logging before and after changes.
 
 Add **`--add-cloudsql-instances=PROJECT_ID:REGION:INSTANCE`** when using Cloud SQL (see Phase 3b for Redis/VPC). *(Replace `--set-secrets` with plain `--set-env-vars` while testing, or wire Secret Manager names you actually created per `docs/SECRETS.md`.)*
 
@@ -531,6 +534,55 @@ gcloud run jobs execute cybmas-kb-ingest-job --region=${REGION} --project=${PROJ
 
 gcloud run jobs execute cybmas-kb-ingest-job --region=${REGION} --project=${PROJECT_ID} \
   --update-env-vars=KB_GCS_URI=gs://YOUR_BUCKET/other/kb.jsonl --wait
+```
+
+---
+
+## Phase 7c — `seed_sample_data.py` → `tickets` / `incidents` (Cloud Run Job)
+
+Runs **`scripts/seed_sample_data.py`** in Cloud Run: inserts/updates **business_units**, demo **tickets** and **incidents** with **Vertex** `text-embedding-004` embeddings. **Idempotent** (`ON CONFLICT DO UPDATE`). No GCS, no Redis.
+
+**When to use:** After **Phase 5b** migrations on Cloud SQL, to populate demo vectors for search (alternative or supplement to real JIRA via **`cybmas-embedding-worker`**).
+
+Build:
+
+```bash
+gcloud builds submit --config=cloudbuild.seed-sample-job.yaml --substitutions=_TAG=YOUR_TAG .
+```
+
+### Prereqs
+
+- **Migrations** applied on the target database (`tickets`, `incidents`, `business_units`, pgvector).
+- **`database_url`** secret (Unix socket DSN for Cloud Run) mapped to **`DATABASE_URL`**.
+- **Vertex AI**: **`GCP_PROJECT_ID`**, **`VERTEX_AI_LOCATION`** (e.g. `us-central1`). Service account needs **Vertex AI User** + **Cloud SQL Client** + **Secret Manager Accessor**.
+
+### Deploy example
+
+```bash
+export PROJECT_ID=YOUR_PROJECT_ID
+export REGION=us-central1
+export INSTANCE_CONNECTION_NAME=${PROJECT_ID}:${REGION}:YOUR_INSTANCE
+export IMAGE=${REGION}-docker.pkg.dev/${PROJECT_ID}/cybmas/seed-sample-job:latest
+
+gcloud run jobs deploy cybmas-seed-sample-job \
+  --image=${IMAGE} \
+  --region=${REGION} \
+  --project=${PROJECT_ID} \
+  --tasks=1 \
+  --max-retries=0 \
+  --task-timeout=7200 \
+  --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},VERTEX_AI_LOCATION=us-central1 \
+  --set-secrets=DATABASE_URL=database_url:latest \
+  --add-cloudsql-instances=${INSTANCE_CONNECTION_NAME} \
+  --service-account=YOUR_SA@${PROJECT_ID}.iam.gserviceaccount.com
+```
+
+The seeder sleeps **1 second** between each embedding call (rate limiting); many rows can take **tens of minutes** — **`--task-timeout=7200`** (2 hours) is conservative.
+
+### Run
+
+```bash
+gcloud run jobs execute cybmas-seed-sample-job --region=${REGION} --project=${PROJECT_ID} --wait
 ```
 
 ---

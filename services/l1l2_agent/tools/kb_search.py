@@ -129,6 +129,84 @@ def _row_metadata(row) -> dict:
     }
 
 
+async def kb_search_with_vector_str(
+    pool,
+    query_text: str,
+    vector_str: str,
+    *,
+    top_k: int = 10,
+    category: str | None = None,
+    level: str | None = None,
+    tags_any: list[str] | None = None,
+) -> list[dict]:
+    """Run KB vector + lexical merge + rerank using a precomputed embedding string."""
+    clamped_top_k = min(max(1, top_k), 50)
+    cat = (category.strip() if category else None) or None
+    lev = (level.strip() if level else None) or None
+    tag_arr: list[str] = []
+    if tags_any:
+        tag_arr = sorted({t.strip().lower() for t in tags_any if t and t.strip()})
+
+    fetch_limit = min(50, max(clamped_top_k * 4, clamped_top_k + 25))
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            _SEARCH_SQL,
+            vector_str,
+            cat,
+            lev,
+            tag_arr,
+            fetch_limit,
+        )
+
+        qstrip = query_text.strip()
+        terms = significant_terms(query_text)
+        lexical_rows: list = []
+        if len(qstrip) >= 8 or len(terms) >= 2:
+            lexical_rows = await conn.fetch(
+                _LEXICAL_KB_SQL,
+                cat,
+                lev,
+                tag_arr,
+                qstrip[:500],
+                terms,
+            )
+
+    by_doc: dict[str, dict] = {}
+    for row in rows:
+        by_doc[row["doc_id"]] = dict(row)
+    for row in lexical_rows:
+        did = row["doc_id"]
+        if did not in by_doc:
+            by_doc[did] = dict(row)
+        else:
+            prev = float(by_doc[did]["score"])
+            nxt = float(row["score"])
+            merged = dict(by_doc[did])
+            merged["score"] = max(prev, nxt)
+            by_doc[did] = merged
+
+    results = []
+    for row in by_doc.values():
+        ps = row["problem_statement"] or ""
+        did = row["doc_id"]
+        results.append(
+            SearchResult(
+                doc_id=did,
+                title=_kb_title_for_display(row.get("title"), did),
+                summary=ps[:200] if ps else None,
+                score=float(row["score"]),
+                result_type="knowledge",
+                metadata=_row_metadata(row),
+            ).model_dump()
+        )
+
+    results = apply_keyword_rerank(query_text, results, top_n=clamped_top_k)
+    for r in results:
+        r.pop("doc_id", None)
+    return results
+
+
 async def search_knowledge_base(
     query_text: str,
     top_k: int = 10,
@@ -163,70 +241,15 @@ async def search_knowledge_base(
         query_vector = await embed_text(query_text)
         vector_str = _to_vector_str(query_vector)
 
-        clamped_top_k = min(max(1, top_k), 50)
-        cat = (category.strip() if category else None) or None
-        lev = (level.strip() if level else None) or None
-        tag_arr: list[str] = []
-        if tags_any:
-            tag_arr = sorted({t.strip().lower() for t in tags_any if t and t.strip()})
-
-        fetch_limit = min(50, max(clamped_top_k * 4, clamped_top_k + 25))
-
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                _SEARCH_SQL,
-                vector_str,
-                cat,
-                lev,
-                tag_arr,
-                fetch_limit,
-            )
-
-            qstrip = query_text.strip()
-            terms = significant_terms(query_text)
-            lexical_rows: list = []
-            if len(qstrip) >= 8 or len(terms) >= 2:
-                lexical_rows = await conn.fetch(
-                    _LEXICAL_KB_SQL,
-                    cat,
-                    lev,
-                    tag_arr,
-                    qstrip[:500],
-                    terms,
-                )
-
-        by_doc: dict[str, dict] = {}
-        for row in rows:
-            by_doc[row["doc_id"]] = dict(row)
-        for row in lexical_rows:
-            did = row["doc_id"]
-            if did not in by_doc:
-                by_doc[did] = dict(row)
-            else:
-                prev = float(by_doc[did]["score"])
-                nxt = float(row["score"])
-                merged = dict(by_doc[did])
-                merged["score"] = max(prev, nxt)
-                by_doc[did] = merged
-
-        results = []
-        for row in by_doc.values():
-            ps = row["problem_statement"] or ""
-            did = row["doc_id"]
-            results.append(
-                SearchResult(
-                    doc_id=did,
-                    title=_kb_title_for_display(row.get("title"), did),
-                    summary=ps[:200] if ps else None,
-                    score=float(row["score"]),
-                    result_type="knowledge",
-                    metadata=_row_metadata(row),
-                ).model_dump()
-            )
-
-        results = apply_keyword_rerank(query_text, results, top_n=clamped_top_k)
-        for r in results:
-            r.pop("doc_id", None)
+        results = await kb_search_with_vector_str(
+            pool,
+            query_text,
+            vector_str,
+            top_k=top_k,
+            category=category,
+            level=level,
+            tags_any=tags_any,
+        )
 
         latency_ms = round((time.time() - start) * 1000)
         log.info(
