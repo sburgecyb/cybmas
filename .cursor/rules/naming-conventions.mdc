@@ -1,0 +1,15 @@
+---
+description: File, symbol, ADK, database, and environment naming conventions
+alwaysApply: true
+---
+
+# Naming conventions
+
+- Python files: `snake_case.py`
+- Classes: `PascalCase`
+- Functions/variables: `snake_case`
+- Constants: `UPPER_SNAKE_CASE`
+- ADK Agents: `{purpose}_agent`
+- ADK Tools: verb-style (e.g. `search_tickets`, `fetch_jira_ticket`)
+- Database tables: `snake_case` plural
+- Environment variables: `UPPER_SNAKE_CASE`

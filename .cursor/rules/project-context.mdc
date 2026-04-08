@@ -1,0 +1,31 @@
+---
+description: Cybmas multi-agent support stack and Cloud Run architecture
+alwaysApply: true
+---
+
+# Project context
+
+You are building a multi-agent technical support chatbot for L1/L2/L3 support engineers.
+
+## Stack
+
+- **Google ADK** (Agent Development Kit) for agent orchestration
+- **Python 3.11 + FastAPI** for backend services
+- **Next.js 14** (App Router) for frontend
+- **PostgreSQL + pgvector** (`vector(768)`) for vector search
+- **Google Cloud Platform** for all infrastructure
+- **JIRA** as the source of truth for tickets and incidents
+- **Vertex AI** (Gemini 1.5 Flash + `text-embedding-004`, 768-dim) for LLM and embeddings
+- **`GOOGLE_APPLICATION_CREDENTIALS`** for authentication — same service account JSON key locally and in production
+
+## Cloud Run services
+
+1. `api-gateway` — FastAPI, JWT auth, session routing
+2. `orchestrator` — ADK Orchestrator Agent, intent routing
+3. `l1l2-agent` — ADK agent for ticket search (UC1)
+4. `l3-agent` — ADK agent for incident/RCA search (UC2)
+5. `session-agent` — ADK agent for session persistence and feedback
+
+## Cloud Run job
+
+- `embedding-worker` — JIRA → Vertex AI embed → pgvector pipeline

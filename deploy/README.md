@@ -177,12 +177,15 @@ Grant your orchestrator and API gateway service accounts **`roles/secretmanager.
 
 ### 5. Cloud Run flags (orchestrator and API gateway)
 
-Add to **both** `gcloud run deploy` commands:
+Add to **both** `gcloud run deploy` commands (orchestrator and API gateway):
 
 ```text
 --vpc-connector=cybmas-redis-conn `
 --vpc-egress=private-ranges-only `
+--min-instances=1 `
 ```
+
+**`--min-instances=1`** keeps at least one container warm so the first chat after idle does not pay a full cold start on that service. Omit or set `0` only for dev cost savings (expect slower first requests).
 
 Use **`private-ranges-only`** so traffic to Google APIs (Vertex, Secret Manager, Artifact Registry) stays on the default path; only **RFC 1918** destinations (Memorystore) go through the VPC.
 
@@ -211,6 +214,7 @@ gcloud run deploy cybmas-orchestrator \
   --region=${REGION} \
   --platform=managed \
   --allow-unauthenticated \
+  --min-instances=1 \
   --service-account=YOUR_ORCHESTRATOR_SA@${PROJECT_ID}.iam.gserviceaccount.com \
   --vpc-connector=cybmas-redis-conn \
   --vpc-egress=private-ranges-only \
@@ -220,7 +224,12 @@ gcloud run deploy cybmas-orchestrator \
 
 After deploy, open **`/health`** on the orchestrator URL and confirm JSON shows **`"configured": true`** under **`jira_live`**. If **`missing_env`** is non-empty, add those variables and redeploy.
 
-**Latency / cold starts:** Chat runs ADK + Vertex + DB on this service. For steadier response times in production, set **`--min-instances=1`** (or higher) on **`cybmas-orchestrator`** so the container stays warm; compare **`search_kb_and_tickets.complete`** / **`embed_ms`** / **`db_parallel_ms`** in Cloud Logging before and after changes.
+**Latency / cold starts (verify in Cloud Logging):** Chat runs ADK + Vertex + DB on this service. The sample deploy above includes **`--min-instances=1`** so the container stays warm. To **diagnose a slow first message** vs steady state:
+
+- **Cold container:** Cloud Run request logs show a new revision/instance around the spike; orchestrator startup should show **`embedder.initialised`** (model load), then **`orchestrator.embedder_warmup_complete`**, then **`orchestrator.started`**.
+- **Search path:** Tool logs include **`embed_ms`**, **`db_parallel_ms`**, and **`search_kb_and_tickets.complete`** — compare these on the first chat after idle vs the next message in the same session.
+
+Locally, restart the orchestrator and send one chat: **`embedder.initialised`** should appear at startup (warmup), not only on the first user search.
 
 Add **`--add-cloudsql-instances=PROJECT_ID:REGION:INSTANCE`** when using Cloud SQL (see Phase 3b for Redis/VPC). *(Replace `--set-secrets` with plain `--set-env-vars` while testing, or wire Secret Manager names you actually created per `docs/SECRETS.md`.)*
 
@@ -266,6 +275,7 @@ gcloud run deploy cybmas-api \
   --region=${REGION} \
   --platform=managed \
   --allow-unauthenticated \
+  --min-instances=1 \
   --vpc-connector=cybmas-redis-conn \
   --vpc-egress=private-ranges-only \
   --set-env-vars=ORCHESTRATOR_ENDPOINT=${ORCH_URL} \
@@ -352,6 +362,7 @@ gcloud run deploy cybmas-api \
   --region=${REGION} \
   --platform=managed \
   --allow-unauthenticated \
+  --min-instances=1 \
   --service-account=YOUR_GATEWAY_SA@${PROJECT_ID}.iam.gserviceaccount.com \
   --vpc-connector=cybmas-redis-conn \
   --vpc-egress=private-ranges-only \

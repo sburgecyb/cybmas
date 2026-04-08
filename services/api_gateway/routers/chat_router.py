@@ -36,6 +36,7 @@ def _sse(event: dict) -> str:
 
 
 async def _stream_orchestrator(
+    client: httpx.AsyncClient,
     agent_request: AgentRequest,
 ) -> AsyncIterator[str]:
     """Stream-forward SSE from the orchestrator to the browser.
@@ -48,19 +49,18 @@ async def _stream_orchestrator(
     payload = agent_request.model_dump(mode="json")
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                f"{ORCHESTRATOR_ENDPOINT}/process",
-                json=payload,
-            ) as resp:
-                resp.raise_for_status()
-                # aiter_lines() strips trailing \n; we must re-add \n\n so
-                # the browser EventSource parser recognises each event.
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: "):
-                        yield line + "\n\n"
-                    # empty lines between SSE events are skipped by aiter_lines
+        async with client.stream(
+            "POST",
+            f"{ORCHESTRATOR_ENDPOINT}/process",
+            json=payload,
+        ) as resp:
+            resp.raise_for_status()
+            # aiter_lines() strips trailing \n; we must re-add \n\n so
+            # the browser EventSource parser recognises each event.
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    yield line + "\n\n"
+                # empty lines between SSE events are skipped by aiter_lines
     except httpx.ConnectError:
         log.error("chat.orchestrator_unreachable", endpoint=ORCHESTRATOR_ENDPOINT)
         yield _sse({"type": "error", "message": "Orchestrator service unavailable"})
@@ -117,7 +117,7 @@ async def chat(
     )
 
     return StreamingResponse(
-        _stream_orchestrator(agent_request),
+        _stream_orchestrator(request.app.state.http_client, agent_request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

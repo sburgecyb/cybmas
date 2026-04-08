@@ -1,0 +1,52 @@
+---
+description: Google credentials, Gemini 1.5 Flash, and text-embedding-004 via Vertex AI
+alwaysApply: true
+---
+
+# Authentication — Google credentials
+
+ALWAYS use `GOOGLE_APPLICATION_CREDENTIALS` for all Google API calls. NEVER use API keys or hardcoded credentials. ADK, Vertex AI SDK, and `google-generativeai` pick up credentials from this env var automatically.
+
+```python
+import vertexai
+vertexai.init(
+    project=os.getenv("GCP_PROJECT_ID"),
+    location=os.getenv("VERTEX_AI_LOCATION", "us-central1")
+)
+# Credentials loaded automatically from GOOGLE_APPLICATION_CREDENTIALS
+```
+
+NEVER use `GOOGLE_API_KEY` — always `GOOGLE_APPLICATION_CREDENTIALS`.
+
+# LLM — Gemini 1.5 Flash via Vertex AI
+
+Use Gemini 1.5 Flash for all LLM calls. ADK handles auth automatically.
+
+```python
+from google.adk.agents import LlmAgent
+
+agent = LlmAgent(
+    name="agent_name",
+    model="gemini-1.5-flash",
+    instruction="System prompt here...",
+    tools=[...],
+)
+```
+
+# Embeddings — text-embedding-004 (768-dim) via Vertex AI
+
+Always use Vertex AI `text-embedding-004`. Same model locally and in production. Vectors are always 768-dim — pgvector column is `vector(768)`.
+
+```python
+import vertexai
+from vertexai.language_models import TextEmbeddingModel
+
+vertexai.init(project=os.getenv("GCP_PROJECT_ID"), location=os.getenv("VERTEX_AI_LOCATION"))
+model = TextEmbeddingModel.from_pretrained("text-embedding-004")
+
+async def embed_text(text: str) -> list[float]:
+    embeddings = model.get_embeddings([text])
+    return embeddings[0].values  # always 768-dim
+```
+
+NEVER use sentence-transformers or any local embedding model. NEVER use `EMBEDDING_PROVIDER` switching — only Vertex AI. NEVER use Ollama or LiteLLM for this stack.

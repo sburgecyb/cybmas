@@ -1,0 +1,18 @@
+---
+description: Python typing, async I/O, Pydantic, ADK tools, FastAPI, and logging
+globs: **/*.py
+alwaysApply: false
+---
+
+# Code quality (Python / backend)
+
+- Always use Python type hints. No `Any` unless unavoidable.
+- Use Pydantic v2 `BaseModel` for all data structures.
+- Async first: `asyncpg` for DB, `redis.asyncio` for cache, `httpx.AsyncClient` for HTTP.
+- All secrets from environment variables — never hardcoded.
+- Structured JSON logging using `structlog`.
+- Each ADK Tool must be decorated with `@tool` and have a clear docstring.
+- Each ADK Agent uses `LlmAgent` with `model="gemini-1.5-flash"`.
+- Tools in `tools/` directory; skills in `skills/` directory.
+- FastAPI routes use dependency injection for DB and Redis connections.
+- All database operations go through repository classes.

@@ -1,0 +1,14 @@
+---
+description: pgvector, BU filtering, JIRA, sessions, and streaming constraints
+alwaysApply: true
+---
+
+# Important constraints
+
+- pgvector uses cosine similarity: always use `<=>` operator.
+- Embeddings are always 768 dimensions (`text-embedding-004`).
+- Business unit filter is ALWAYS applied to vector search — never search across all BUs without explicit intent.
+- Incident and ticket embeddings are in separate tables — never mix.
+- Sessions stored in PostgreSQL, NOT Redis (Redis is only for caching).
+- JIRA API calls must go through the `jira_fetch` tool only.
+- Streaming responses use SSE — FastAPI `StreamingResponse` with `text/event-stream`.

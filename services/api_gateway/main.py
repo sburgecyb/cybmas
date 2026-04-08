@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import asyncpg
+import httpx
 import structlog
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request, status
@@ -70,6 +71,7 @@ async def lifespan(app: FastAPI):
     app.state.db_pool = None
     app.state.redis = None
     app.state.backends_ready = asyncio.Event()
+    app.state.http_client = httpx.AsyncClient(timeout=120.0)
 
     async def _connect_backends() -> None:
         dsn = os.getenv("DATABASE_URL", "").replace(
@@ -105,6 +107,7 @@ async def lifespan(app: FastAPI):
         await app.state.db_pool.close()
     if app.state.redis is not None:
         await app.state.redis.aclose()
+    await app.state.http_client.aclose()
     log.info("api_gateway.stopped")
 
 

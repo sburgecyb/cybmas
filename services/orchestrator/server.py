@@ -138,6 +138,12 @@ async def lifespan(app: FastAPI):
     _get_l1l2_runner()
     _get_l3_runner()
 
+    # Force text-embedding-004 client init before first /process (lazy in embedder).
+    from pipeline.embedding_worker.embedder import embed_text
+
+    await embed_text("warmup")
+    log.info("orchestrator.embedder_warmup_complete")
+
     missing_jira = _jira_env_missing_keys()
     log.info(
         "orchestrator.started",
@@ -537,6 +543,15 @@ async def _process_stream(request: AgentRequest) -> AsyncGenerator[str, None]:
             if not text and jira_tool_error:
                 text = (
                     f"⚠️ Could not load **{jira_id}** from JIRA: {jira_tool_error}\n\n"
+                    "**Note:** This service looks up **Postgres (`tickets`) first**, then live "
+                    "JIRA. You are seeing JIRA because **no row** was found in the database "
+                    "the orchestrator uses (often Cloud SQL in prod). Locally, "
+                    "**`DATABASE_URL`** may point at a dev DB that still has **seed/demo** "
+                    "rows (e.g. from `seed_sample_data.py`), which is why the same question "
+                    "works on your laptop.\n\n"
+                    "To fix: load tickets into prod Cloud SQL (**embedding worker** sync or "
+                    "**`cybmas-seed-sample-job`** / migrations+seed), **or** ensure the "
+                    "issue exists and is visible to **JIRA_USER_EMAIL** on **JIRA_BASE_URL**.\n\n"
                     "Check Cloud Run **cybmas-orchestrator** env: **JIRA_BASE_URL**, "
                     "**JIRA_API_TOKEN**, **JIRA_USER_EMAIL** (see deploy README)."
                 )

@@ -50,8 +50,8 @@ export default function BusinessUnitSelector({ selected, onChange }: Props) {
             onClick={() => toggle(bu.code)}
             className={`px-3 py-1 rounded-full text-xs font-medium transition-colors border
               ${active
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:border-blue-400'
+                ? 'bg-teal-600 text-white border-teal-600'
+                : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:border-teal-400'
               }`}
           >
             {bu.code} — {bu.label}
