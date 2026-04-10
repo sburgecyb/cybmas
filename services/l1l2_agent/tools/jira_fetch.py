@@ -6,10 +6,14 @@
 must reflect JIRA, which may differ from the synced snapshot).
 
 TTL: fetch_jira_ticket 5 min; check_ticket_status 2 min.
+
+If Redis is unreachable or errors on read/write, both tools skip cache and
+continue with Postgres / live JIRA so chat responses still succeed.
 """
 import json
 import os
 import sys
+from contextlib import suppress
 
 import redis.asyncio as redis
 import structlog
@@ -29,7 +33,7 @@ _STATUS_CACHE_TTL = 120   # 2 minutes
 
 
 async def _cache_get(redis_client: redis.Redis, key: str) -> dict | None:
-    """Return the cached JSON value for ``key``, or None on miss/error."""
+    """Return the cached JSON value for ``key``, or None on miss / bad JSON."""
     raw: bytes | None = await redis_client.get(key)
     if raw:
         try:
@@ -41,6 +45,34 @@ async def _cache_get(redis_client: redis.Redis, key: str) -> dict | None:
 
 async def _cache_set(redis_client: redis.Redis, key: str, value: dict, ttl: int) -> None:
     await redis_client.setex(key, ttl, json.dumps(value, default=str))
+
+
+async def _safe_cache_get(redis_client: redis.Redis, key: str) -> dict | None:
+    """Cache read; None on miss or any Redis failure (treat as cache bypass)."""
+    try:
+        return await _cache_get(redis_client, key)
+    except Exception as exc:
+        log.warning("jira_fetch.redis_cache_get_failed", key=key, error=str(exc))
+        return None
+
+
+async def _safe_cache_set(
+    redis_client: redis.Redis, key: str, value: dict, ttl: int
+) -> None:
+    """Best-effort cache write; logs and ignores Redis failures."""
+    try:
+        await _cache_set(redis_client, key, value, ttl)
+    except Exception as exc:
+        log.warning("jira_fetch.redis_cache_set_failed", key=key, error=str(exc))
+
+
+def _redis_client_or_none() -> redis.Redis | None:
+    """Build async Redis client; return None if construction fails."""
+    try:
+        return redis.from_url(_REDIS_URL)
+    except Exception as exc:
+        log.warning("jira_fetch.redis_client_failed", error=str(exc))
+        return None
 
 
 def _iso(dt: object | None) -> str | None:
@@ -131,18 +163,23 @@ async def fetch_jira_ticket(jira_id: str) -> dict:
         Data may come from the local ``tickets`` table (field ``_source``: ``database``)
         when the issue is not available from live JIRA.
     """
-    redis_client = redis.from_url(_REDIS_URL)
+    redis_client = _redis_client_or_none()
     cache_key = f"jira:ticket:{jira_id}"
 
     try:
-        cached = await _cache_get(redis_client, cache_key)
+        cached: dict | None = None
+        if redis_client is not None:
+            cached = await _safe_cache_get(redis_client, cache_key)
         if cached is not None:
             log.info("jira_fetch.cache_hit", jira_id=jira_id)
             return ToolResult(success=True, data=cached).model_dump()
 
         db_data = await _try_load_ticket_from_db(jira_id)
         if db_data is not None:
-            await _cache_set(redis_client, cache_key, db_data, _TICKET_CACHE_TTL)
+            if redis_client is not None:
+                await _safe_cache_set(
+                    redis_client, cache_key, db_data, _TICKET_CACHE_TTL
+                )
             log.info("jira_fetch.success_db", jira_id=jira_id)
             return ToolResult(success=True, data=db_data).model_dump()
 
@@ -184,7 +221,10 @@ async def fetch_jira_ticket(jira_id: str) -> dict:
             }
 
         result["_source"] = "jira"
-        await _cache_set(redis_client, cache_key, result, _TICKET_CACHE_TTL)
+        if redis_client is not None:
+            await _safe_cache_set(
+                redis_client, cache_key, result, _TICKET_CACHE_TTL
+            )
         log.info("jira_fetch.success", jira_id=jira_id)
         return ToolResult(success=True, data=result).model_dump()
 
@@ -197,7 +237,9 @@ async def fetch_jira_ticket(jira_id: str) -> dict:
         log.error("jira_fetch.failed", jira_id=jira_id, error=str(exc))
         return ToolResult(success=False, error=str(exc)).model_dump()
     finally:
-        await redis_client.aclose()
+        if redis_client is not None:
+            with suppress(Exception):
+                await redis_client.aclose()
 
 
 async def check_ticket_status(jira_id: str) -> dict:
@@ -214,11 +256,13 @@ async def check_ticket_status(jira_id: str) -> dict:
     Returns:
         Dictionary with status, assignee, priority and last updated date.
     """
-    redis_client = redis.from_url(_REDIS_URL)
+    redis_client = _redis_client_or_none()
     cache_key = f"jira:status:{jira_id}"
 
     try:
-        cached = await _cache_get(redis_client, cache_key)
+        cached: dict | None = None
+        if redis_client is not None:
+            cached = await _safe_cache_get(redis_client, cache_key)
         if cached is not None:
             log.info("jira_status.cache_hit", jira_id=jira_id)
             return ToolResult(success=True, data=cached).model_dump()
@@ -238,7 +282,10 @@ async def check_ticket_status(jira_id: str) -> dict:
                 "_source": "jira",
             }
 
-        await _cache_set(redis_client, cache_key, result, _STATUS_CACHE_TTL)
+        if redis_client is not None:
+            await _safe_cache_set(
+                redis_client, cache_key, result, _STATUS_CACHE_TTL
+            )
         log.info("jira_status.success", jira_id=jira_id)
         return ToolResult(success=True, data=result).model_dump()
 
@@ -246,4 +293,6 @@ async def check_ticket_status(jira_id: str) -> dict:
         log.error("jira_status.failed", jira_id=jira_id, error=str(exc))
         return ToolResult(success=False, error=str(exc)).model_dump()
     finally:
-        await redis_client.aclose()
+        if redis_client is not None:
+            with suppress(Exception):
+                await redis_client.aclose()
