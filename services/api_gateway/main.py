@@ -26,6 +26,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env.local"))
 
+from services.shared.redis_async import (  # noqa: E402
+    async_redis_from_url,
+    is_redis_disabled,
+    redis_url_from_env,
+)
+
 from services.api_gateway.middleware.auth_middleware import get_current_engineer  # noqa: E402
 from services.api_gateway.middleware.rate_limit import check_rate_limit  # noqa: E402
 from services.api_gateway.routers.auth_router import router as auth_router  # noqa: E402
@@ -66,8 +72,6 @@ async def lifespan(app: FastAPI):
     ``create_pool`` (e.g. Cloud SQL socket misconfiguration) would otherwise
     exceed Cloud Run's startup probe timeout.
     """
-    import redis.asyncio as aioredis
-
     app.state.db_pool = None
     app.state.redis = None
     app.state.backends_ready = asyncio.Event()
@@ -87,9 +91,10 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.exception("api_gateway.db_pool_failed", error=str(exc))
         try:
-            app.state.redis = aioredis.from_url(
-                os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
-            )
+            if is_redis_disabled():
+                log.info("api_gateway.redis_disabled")
+            else:
+                app.state.redis = async_redis_from_url(redis_url_from_env())
         except Exception as exc:
             log.exception("api_gateway.redis_client_failed", error=str(exc))
         log.info("api_gateway.backends_init_finished")

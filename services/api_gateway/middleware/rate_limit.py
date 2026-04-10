@@ -12,6 +12,7 @@ log = structlog.get_logger()
 _LIMIT = 60          # requests per minute
 _WINDOW = 60         # seconds
 _TTL = 120           # key TTL — 2× window so Redis cleans up naturally
+_REDIS_OP_TIMEOUT = 5.0  # seconds — avoid hanging when Redis host is gone
 
 
 async def check_rate_limit(request: Request) -> None:
@@ -38,9 +39,13 @@ async def check_rate_limit(request: Request) -> None:
     key = f"ratelimit:{engineer_id}:{bucket}"
 
     try:
-        count = await redis.incr(key)
-        if count == 1:
-            await redis.expire(key, _TTL)
+        async def _incr_and_ttl() -> int:
+            n = await redis.incr(key)
+            if n == 1:
+                await redis.expire(key, _TTL)
+            return n
+
+        count = await asyncio.wait_for(_incr_and_ttl(), timeout=_REDIS_OP_TIMEOUT)
 
         if count > _LIMIT:
             seconds_until_reset = _WINDOW - (int(time.time()) % _WINDOW)
@@ -57,6 +62,8 @@ async def check_rate_limit(request: Request) -> None:
             )
     except HTTPException:
         raise
+    except asyncio.TimeoutError:
+        log.warning("rate_limit.redis_timeout", timeout_s=_REDIS_OP_TIMEOUT)
     except Exception as exc:
         # Redis errors should not block the request
         log.warning("rate_limit.redis_error", error=str(exc))

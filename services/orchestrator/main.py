@@ -44,13 +44,19 @@ async def get_db_pool() -> asyncpg.Pool:
 
 
 async def get_redis():
-    """Return (creating if necessary) the Redis client."""
+    """Return (creating if necessary) the Redis client, or None if Redis is disabled."""
     global _redis_client
     if _redis_client is None:
-        import redis.asyncio as redis
+        from services.shared.redis_async import (
+            async_redis_from_url,
+            is_redis_disabled,
+            redis_url_from_env,
+        )
 
-        _redis_client = redis.from_url(
-            os.getenv("REDIS_URL", "redis://127.0.0.1:6379"),
+        if is_redis_disabled():
+            return None
+        _redis_client = async_redis_from_url(
+            redis_url_from_env(),
             decode_responses=True,
         )
     return _redis_client

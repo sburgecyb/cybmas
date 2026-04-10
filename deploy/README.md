@@ -643,6 +643,8 @@ Deploy steps update **service** container images only. VPC connector, secrets, a
 | `GCP_REGION` | No | Defaults to `us-central1` in the workflow |
 | `ARTIFACT_REGISTRY_REPO` | No | Defaults to `cybmas` |
 | `CLOUD_RUN_SERVICE_*_DEV` | No | Only if your Dev service names differ from `cybmas-api`, `cybmas-orchestrator`, `cybmas-frontend` |
+| `REDIS_DISABLED` | No | Set to **`true`** so CI/CD adds **`REDIS_DISABLED=true`** on **`cybmas-api`** and **`cybmas-orchestrator`** on every deploy (no Redis / Memorystore). Omit or set anything else to leave existing Cloud Run env unchanged. |
+
 **Secrets “not found” in Actions though they exist in Settings**
 
 - GitHub only injects **repository** Actions secrets into runs for that **same** repository. Open the failed run: the title shows **`owner/repo`** — secrets must be defined on **that** repo. If you push to a **fork**, the workflow runs on the **fork**; the fork has **no** copies of your upstream secrets unless you add them there (or push to upstream instead).

@@ -22,6 +22,11 @@ from dotenv import load_dotenv
 _ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 from services.shared.models import BusinessUnitScope  # noqa: E402
+from services.shared.redis_async import (  # noqa: E402
+    async_redis_from_url,
+    is_redis_disabled,
+    redis_url_from_env,
+)
 
 load_dotenv(_ROOT / ".env.local")
 
@@ -101,6 +106,7 @@ _SESSION_RESUME_KEYWORDS: list[str] = [
 ]
 
 _INTENT_CACHE_TTL = 60  # seconds
+_REDIS_CMD_TIMEOUT = 6.0  # seconds — extra guard if Redis is slow or wedged
 
 
 # ── Lazy singletons ────────────────────────────────────────────────────────────
@@ -111,10 +117,8 @@ _redis_client = None
 def _get_redis() -> object:
     global _redis_client
     if _redis_client is None:
-        import redis.asyncio as redis
-
-        _redis_client = redis.from_url(
-            os.getenv("REDIS_URL", "redis://127.0.0.1:6379"),
+        _redis_client = async_redis_from_url(
+            redis_url_from_env(),
             decode_responses=True,
         )
     return _redis_client
@@ -191,15 +195,25 @@ async def classify_intent(
         return IntentType.JIRA_LOOKUP
 
     # ── 1. Check Redis cache ───────────────────────────────────────────────────
-    redis = _get_redis()
+    redis = None
     cache_key = _cache_key(message)
-    try:
-        cached = await redis.get(cache_key)
-        if cached:
-            log.info("intent_classifier.cache_hit", intent=cached)
-            return IntentType(cached)
-    except Exception as exc:
-        log.warning("intent_classifier.cache_error", error=str(exc))
+    if not is_redis_disabled():
+        redis = _get_redis()
+        try:
+            cached = await asyncio.wait_for(
+                redis.get(cache_key),
+                timeout=_REDIS_CMD_TIMEOUT,
+            )
+            if cached:
+                log.info("intent_classifier.cache_hit", intent=cached)
+                return IntentType(cached)
+        except asyncio.TimeoutError:
+            log.warning(
+                "intent_classifier.cache_timeout",
+                timeout_s=_REDIS_CMD_TIMEOUT,
+            )
+        except Exception as exc:
+            log.warning("intent_classifier.cache_error", error=str(exc))
 
     # ── 2. Fast rule-based classification ─────────────────────────────────────
     lower = message.lower()
@@ -228,10 +242,19 @@ async def classify_intent(
         intent = IntentType.TICKET_SEARCH
 
     # ── 4. Cache result ────────────────────────────────────────────────────────
-    try:
-        await redis.setex(cache_key, _INTENT_CACHE_TTL, intent.value)
-    except Exception as exc:
-        log.warning("intent_classifier.cache_write_error", error=str(exc))
+    if redis is not None:
+        try:
+            await asyncio.wait_for(
+                redis.setex(cache_key, _INTENT_CACHE_TTL, intent.value),
+                timeout=_REDIS_CMD_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            log.warning(
+                "intent_classifier.cache_write_timeout",
+                timeout_s=_REDIS_CMD_TIMEOUT,
+            )
+        except Exception as exc:
+            log.warning("intent_classifier.cache_write_error", error=str(exc))
 
     log.info(
         "intent_classifier.classified",

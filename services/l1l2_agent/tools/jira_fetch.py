@@ -21,10 +21,13 @@ import structlog
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from pipeline.embedding_worker.jira_client import JIRAClient, JIRAClientError  # noqa: E402
 from services.shared.models import ToolResult  # noqa: E402
+from services.shared.redis_async import (  # noqa: E402
+    async_redis_from_url,
+    is_redis_disabled,
+    redis_url_from_env,
+)
 
 log = structlog.get_logger()
-
-_REDIS_URL: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
 _TICKET_CACHE_TTL = 300   # 5 minutes
 _STATUS_CACHE_TTL = 120   # 2 minutes
 
@@ -67,9 +70,11 @@ async def _safe_cache_set(
 
 
 def _redis_client_or_none() -> redis.Redis | None:
-    """Build async Redis client; return None if construction fails."""
+    """Build async Redis client; return None if disabled or construction fails."""
+    if is_redis_disabled():
+        return None
     try:
-        return redis.from_url(_REDIS_URL)
+        return async_redis_from_url(redis_url_from_env())
     except Exception as exc:
         log.warning("jira_fetch.redis_client_failed", error=str(exc))
         return None
