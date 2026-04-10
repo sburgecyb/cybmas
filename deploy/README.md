@@ -643,7 +643,7 @@ Deploy steps update **service** container images only. VPC connector, secrets, a
 | `GCP_REGION` | No | Defaults to `us-central1` in the workflow |
 | `ARTIFACT_REGISTRY_REPO` | No | Defaults to `cybmas` |
 | `CLOUD_RUN_SERVICE_*_DEV` | No | Only if your Dev service names differ from `cybmas-api`, `cybmas-orchestrator`, `cybmas-frontend` |
-| `REDIS_DISABLED` | No | Set to **`true`** so CI/CD adds **`REDIS_DISABLED=true`** on **`cybmas-api`** and **`cybmas-orchestrator`** on every deploy (no Redis / Memorystore). Omit or set anything else to leave existing Cloud Run env unchanged. |
+| `REDIS_DISABLED` | No | **`true`** → each deploy sets **`REDIS_DISABLED=true`** on **`cybmas-api`** and **`cybmas-orchestrator`** (no Redis). **`false`** → sets **`REDIS_DISABLED=false`** so the app uses **`REDIS_URL`** again. **Unset** → workflow does not change that env var (a previous `true` would stay until you set **`false`** or edit Cloud Run). Ensure **`REDIS_URL`** (secret) points at Memorystore when using Redis. |
 
 **Secrets “not found” in Actions though they exist in Settings**
 

@@ -79,7 +79,7 @@ jobs:
           SVC_API: ${{ vars.CLOUD_RUN_SERVICE_API_DEV != '' && vars.CLOUD_RUN_SERVICE_API_DEV || 'cybmas-api' }}
           SVC_ORCH: ${{ vars.CLOUD_RUN_SERVICE_ORCH_DEV != '' && vars.CLOUD_RUN_SERVICE_ORCH_DEV || 'cybmas-orchestrator' }}
           SVC_FE: ${{ vars.CLOUD_RUN_SERVICE_FRONTEND_DEV != '' && vars.CLOUD_RUN_SERVICE_FRONTEND_DEV || 'cybmas-frontend' }}
-          # When `true`, sets REDIS_DISABLED=true on api-gateway + orchestrator each deploy (no Memorystore).
+          # `true` → REDIS_DISABLED=true (skip Redis). `false` → REDIS_DISABLED=false (use Redis). Unset → do not change Cloud Run env.
           REDIS_DISABLED: ${{ vars.REDIS_DISABLED }}
         run: |
           set -euo pipefail
@@ -98,8 +98,12 @@ jobs:
               --project="$PROJ"
               --quiet
             )
-            if { [ "$svc" = "$SVC_API" ] || [ "$svc" = "$SVC_ORCH" ]; } && [ "${REDIS_DISABLED:-}" = "true" ]; then
-              cmd+=(--update-env-vars=REDIS_DISABLED=true)
+            if [ "$svc" = "$SVC_API" ] || [ "$svc" = "$SVC_ORCH" ]; then
+              if [ "${REDIS_DISABLED:-}" = "true" ]; then
+                cmd+=(--update-env-vars=REDIS_DISABLED=true)
+              elif [ "${REDIS_DISABLED:-}" = "false" ]; then
+                cmd+=(--update-env-vars=REDIS_DISABLED=false)
+              fi
             fi
             "${cmd[@]}"
           }
